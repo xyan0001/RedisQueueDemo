@@ -34,54 +34,124 @@ This system addresses the following requirements:
 
 ### Terminal Initialization
 
-The system initializes terminals from configuration at startup:
+When the application starts, terminals are initialized with Redis commands:
 
+```redis
+# For each terminal (e.g., terminal-001)
+HSET terminal:info:terminal-001 id "terminal-001" url "example.com" port 22 username "user1" password "pass1"
+HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689600
+SADD terminal_pool terminal-001
+```
+
+The system:
 1. Reads terminal configuration from appsettings.json
-2. Creates terminal records in Redis with status "available"
-3. Adds terminals to the available pool
+2. Creates terminal records in Redis with `HSET` commands
+3. Adds terminal IDs to the available pool with `SADD`
 
 ### Terminal Allocation/Release
 
-The process for terminal usage is:
+#### Allocation Process
 
-1. **Allocation**: 
-   - Pop a terminal ID from the available pool
-   - Mark it as in-use with the pod ID
-   - Record the last used time
+```redis
+# Atomically pop a terminal from the pool
+SPOP terminal_pool                                 # Returns "terminal-001"
 
-2. **Session Management**:
-   - Check for existing session
-   - If none exists, perform login and create session
-   - Refresh TTL to prevent expiration
+# Update status to in-use
+HSET terminal:status:terminal-001 status "in_use" pod_id "pod-abc123" last_used_time 1717689700
 
-3. **Release**:
-   - Mark terminal as available
-   - Add it back to the pool
-   - Update last used time
+# Get terminal information
+HGETALL terminal:info:terminal-001                 # Returns all terminal details
+```
+
+The `SPOP` command atomically removes and returns a random element from the set, preventing race conditions.
+
+#### Session Management
+
+```redis
+# Check if session exists
+GET terminal:session:terminal-001                  # Returns session ID or nil
+
+# If nil, login and create session
+SET terminal:session:terminal-001 "session-xyz" EX 300  # Create with 5-minute TTL
+
+# If exists, refresh session TTL
+EXPIRE terminal:session:terminal-001 300           # Reset TTL to 5 minutes
+```
+
+During active usage, the pod periodically updates the last_used_time:
+
+```redis
+HSET terminal:status:terminal-001 last_used_time 1717689730
+```
+
+#### Terminal Release
+
+```redis
+# Atomic release using transaction
+MULTI
+HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689800
+SADD terminal_pool terminal-001
+EXEC
+```
+
+The `MULTI`/`EXEC` commands create a Redis transaction to ensure both operations (status update and adding back to pool) happen atomically.
 
 ### Crash Recovery
 
 The system automatically detects and recovers from pod crashes:
 
-1. A background service periodically checks for terminals marked as in-use
-2. If the last_used_time is older than the threshold (30s by default), the terminal is considered orphaned
-3. Orphaned terminals are reclaimed and added back to the pool
+```redis
+# For each terminal status key
+SCAN 0 MATCH terminal:status:* COUNT 1000          # Efficiently iterate through keys
+HGETALL terminal:status:terminal-002               # Get status, pod_id, last_used_time
+
+# If status is "in_use" and last_used_time is too old (e.g., >30s ago)
+MULTI
+HSET terminal:status:terminal-002 status "available" pod_id "" last_used_time 1717689950
+SADD terminal_pool terminal-002
+EXEC
+```
+
+1. A background service periodically scans all terminals with `SCAN`
+2. Terminals with old `last_used_time` (> 30s) are considered orphaned
+3. Orphaned terminals are reclaimed with a transaction
 
 ### Graceful Shutdown
 
 When pods are terminated:
 
-1. The preStop lifecycle hook provides time for in-flight requests to complete
-2. The service releases all terminals allocated to the terminating pod
-3. Session data is preserved in Redis for potential reuse
+```redis
+# Get all terminals used by this pod
+KEYS terminal:status:*                             # Get all status keys (SCAN in production)
+
+# For each key, check if used by this pod
+HGET terminal:status:terminal-001 pod_id           # Check if "pod-abc123"
+
+# For each terminal used by this pod
+MULTI
+HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689900
+SADD terminal_pool terminal-001
+EXEC
+```
+
+1. The preStop lifecycle hook provides time for cleanup
+2. All terminals allocated to the terminating pod are released
+3. Session data remains in Redis until natural expiration
 
 ### Dynamic Terminal Expansion
 
-Terminals can be added dynamically:
+Adding new terminals to the pool:
 
-1. Use the Admin API to add new terminals
-2. New pods automatically discover all available terminals
-3. No downtime during expansion
+```redis
+# For each new terminal (e.g., terminal-041)
+HSET terminal:info:terminal-041 id "terminal-041" url "example.com" port 22 username "user41" password "pass41"
+HSET terminal:status:terminal-041 status "available" pod_id "" last_used_time 1717690000
+SADD terminal_pool terminal-041
+```
+
+1. New terminals can be added through the Admin API
+2. Existing pods discover new terminals through the `terminal_pool` set
+3. No service disruption during expansion
 
 ## Scaling Calculations
 
