@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TerminalManagementService", "TerminalManagementService\TerminalManagementService.csproj", "{96706FAB-A7F5-2E04-360C-FB027CB10DCB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {DB64F8D2-B7BD-44AB-B57B-F7D0A1543D01}
+	EndGlobalSection
+EndGlobal

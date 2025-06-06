@@ -1,0 +1,6 @@
+@TerminalManagementService_HostAddress = http://localhost:5164
+
+GET {{TerminalManagementService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
