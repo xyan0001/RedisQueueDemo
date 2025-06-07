@@ -7,8 +7,7 @@ using System.Threading.Tasks;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
-namespace TerminalManagementService
-{
+namespace TerminalManagementService;
     public class CachePerformanceTest
     {
         private readonly ITerminalService _terminalService;
@@ -137,9 +136,7 @@ namespace TerminalManagementService
                 Console.WriteLine($"Hit rate: {metrics.hitRate:0.00}%");
             }
             catch (Exception ex)
-            {
-                Console.WriteLine($"Error: {ex.Message}");
+            {                Console.WriteLine($"Error: {ex.Message}");
             }
         }
     }
-}

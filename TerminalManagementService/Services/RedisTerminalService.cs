@@ -3,28 +3,29 @@ using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TerminalManagementService.Models;
 
-namespace TerminalManagementService.Services
-{
-    public class RedisTerminalService : ITerminalService
-    {        private readonly ConnectionMultiplexer _redis;
-        private readonly IDatabase _db;
-        private readonly ILogger<RedisTerminalService> _logger;
-        private readonly TerminalConfiguration _config;
-        private readonly string _podId;
-        private readonly ConcurrentDictionary<string, TerminalInfo> _terminalInfoCache;
+namespace TerminalManagementService.Services;
 
-        // Redis key patterns
-        private const string TerminalInfoKeyPattern = "terminal:info:{0}";
-        private const string TerminalStatusKeyPattern = "terminal:status:{0}";
-        private const string TerminalSessionKeyPattern = "terminal:session:{0}";
-        private const string TerminalPoolKey = "terminal_pool";        public RedisTerminalService(
+public class RedisTerminalService : ITerminalService
+{
+    private readonly ConnectionMultiplexer _redis;
+    private readonly IDatabase _db;
+    private readonly ILogger<RedisTerminalService> _logger;
+    private readonly TerminalConfiguration _config;
+    private readonly string _podId;
+    private readonly ConcurrentDictionary<string, TerminalInfo> _terminalInfoCache;
+
+    // Redis key patterns
+    private const string TerminalInfoKeyPattern = "terminal:info:{0}";
+    private const string TerminalStatusKeyPattern = "terminal:status:{0}";
+    private const string TerminalSessionKeyPattern = "terminal:session:{0}";
+    private const string TerminalPoolKey = "terminal_pool";
+    
+    public RedisTerminalService(
             ConnectionMultiplexer redis,
             IOptions<TerminalConfiguration> config,
             ILogger<RedisTerminalService> logger)
@@ -597,20 +598,18 @@ namespace TerminalManagementService.Services
         }
 
         // Cache metrics
-        private long _cacheHits = 0;
-        private long _cacheMisses = 0;
+            private long _cacheHits = 0;
+    private long _cacheMisses = 0;
+    
+    /// <summary>
+    /// Get cache performance metrics    /// </summary>
+    public (long hits, long misses, double hitRate) GetCacheMetrics()
+    {
+        long hits = _cacheHits;
+        long misses = _cacheMisses;
+        long total = hits + misses;
+        double hitRate = total > 0 ? (double)hits / total * 100 : 0;
         
-        /// <summary>
-        /// Get cache performance metrics
-        /// </summary>
-        public (long hits, long misses, double hitRate) GetCacheMetrics()
-        {
-            long hits = _cacheHits;
-            long misses = _cacheMisses;
-            long total = hits + misses;
-            double hitRate = total > 0 ? (double)hits / total * 100 : 0;
-            
-            return (hits, misses, hitRate);
-        }
+        return (hits, misses, hitRate);
     }
 }

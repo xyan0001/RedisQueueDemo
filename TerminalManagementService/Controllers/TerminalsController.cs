@@ -5,8 +5,7 @@ using Microsoft.Extensions.Logging;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
-namespace TerminalManagementService.Controllers
-{
+namespace TerminalManagementService.Controllers;
     [ApiController]
     [Route("api/[controller]")]
     public class TerminalsController : ControllerBase
@@ -88,10 +87,8 @@ namespace TerminalManagementService.Controllers
                 return Ok(new { Message = $"Session for terminal {id} refreshed successfully" });
             }
             catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error refreshing session for terminal {Id}", id);
+            {                _logger.LogError(ex, "Error refreshing session for terminal {Id}", id);
                 return StatusCode(500, $"Error refreshing session for terminal {id}");
             }
         }
     }
-}

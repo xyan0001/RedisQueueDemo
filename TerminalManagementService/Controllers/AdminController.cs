@@ -6,8 +6,7 @@ using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 using TerminalManagementService;
 
-namespace TerminalManagementService.Controllers
-{
+namespace TerminalManagementService.Controllers;
     [ApiController]
     [Route("api/[controller]")]
     public class AdminController : ControllerBase
@@ -124,11 +123,8 @@ namespace TerminalManagementService.Controllers
         /// <summary>
         /// Starting index for new terminals
         /// </summary>
-        public int StartIndex { get; set; }
-
-        /// <summary>
+        public int StartIndex { get; set; }        /// <summary>
         /// Number of terminals to add
         /// </summary>
         public int Count { get; set; }
     }
-}

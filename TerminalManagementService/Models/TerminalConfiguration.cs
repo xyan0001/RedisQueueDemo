@@ -1,8 +1,6 @@
 using System.Collections.Generic;
 
-namespace TerminalManagementService.Models
-{
-    /// <summary>
+namespace TerminalManagementService.Models;    /// <summary>
     /// Configuration for terminal details
     /// </summary>
     public class TerminalConfiguration
@@ -10,7 +8,7 @@ namespace TerminalManagementService.Models
         /// <summary>
         /// Common URL for all terminals
         /// </summary>
-        public string Url { get; set; }
+        public required string Url { get; set; }
 
         /// <summary>
         /// Common port for all terminals
@@ -20,17 +18,17 @@ namespace TerminalManagementService.Models
         /// <summary>
         /// Base username pattern (e.g., "user{0}" where {0} is the terminal ID)
         /// </summary>
-        public string UsernamePattern { get; set; }
+        public required string UsernamePattern { get; set; }
 
         /// <summary>
         /// Base password pattern (e.g., "pass{0}" where {0} is the terminal ID)
         /// </summary>
-        public string PasswordPattern { get; set; }
+        public required string PasswordPattern { get; set; }
 
         /// <summary>
         /// Terminal ID prefix
         /// </summary>
-        public string TerminalIdPrefix { get; set; }
+        public required string TerminalIdPrefix { get; set; }
 
         /// <summary>
         /// Initial number of terminals to create
@@ -40,11 +38,8 @@ namespace TerminalManagementService.Models
         /// <summary>
         /// Session timeout in seconds (default 300 seconds = 5 minutes)
         /// </summary>
-        public int SessionTimeoutSeconds { get; set; } = 300;
-
-        /// <summary>
+        public int SessionTimeoutSeconds { get; set; } = 300;        /// <summary>
         /// Orphaned terminal timeout in seconds (default 30 seconds)
         /// </summary>
         public int OrphanedTerminalTimeoutSeconds { get; set; } = 30;
     }
-}
