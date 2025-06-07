@@ -37,10 +37,10 @@ public class RedisTerminalService : ITerminalService
         _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
         _terminalInfoCache = new ConcurrentDictionary<string, TerminalInfo>();
 
-        // Get pod ID from environment variable (set by Kubernetes) or from config
+        // Get pod name from environment variable (set by Kubernetes) or from config
         _podId = Environment.GetEnvironmentVariable("POD_NAME") ?? _config.PodName;
 
-        _logger.LogInformation("RedisTerminalServiceRefactored initialized with terminal info caching enabled");
+        _logger.LogInformation("RedisTerminalService initialized with terminal info caching enabled");
     }
 
     /// <summary>
@@ -74,7 +74,7 @@ public class RedisTerminalService : ITerminalService
             foreach (var terminalDataString in terminalsData)
             {
                 index++;
-                string terminalId = $"{_config.TerminalIdPrefix}{index:000}";
+                string terminalId = $"{_config.TerminalIdPrefix}{index:0000}";
                 string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
 
                 // Parse terminal data string
@@ -154,10 +154,9 @@ public class RedisTerminalService : ITerminalService
 
             // Ensure we don't exceed the available data
             int maxIndex = Math.Min(startIndex + count - 1, terminalsData.Length);
-
             for (int i = startIndex; i <= maxIndex; i++)
             {
-                string terminalId = $"{_config.TerminalIdPrefix}{i:000}";
+                string terminalId = $"{_config.TerminalIdPrefix}{i:0000}";
                 string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
 
                 // Check if this terminal already exists
@@ -236,7 +235,7 @@ public class RedisTerminalService : ITerminalService
             await UpdateTerminalStatusAsync(status);
 
             // Get terminal info from cache or configuration
-            var terminalInfo = await GetTerminalInfoAsync(id);
+            var terminalInfo = GetTerminalInfo(id);
             if (terminalInfo == null)
             {
                 _logger.LogError("Failed to get terminal info for allocated terminal: {TerminalId}", id);
@@ -314,7 +313,7 @@ public class RedisTerminalService : ITerminalService
             _logger.LogInformation("Creating new session for terminal: {TerminalId}", terminalId);
 
             // Get terminal info from cache or configuration
-            var terminalInfo = await GetTerminalInfoAsync(terminalId);
+            var terminalInfo = GetTerminalInfo(terminalId);
             if (terminalInfo == null)
             {
                 _logger.LogError("Failed to get terminal info for session creation: {TerminalId}", terminalId);
@@ -477,6 +476,12 @@ public class RedisTerminalService : ITerminalService
         // This is a placeholder for the actual terminal login implementation
         // In a real system, this would connect to the terminal using the provided credentials
 
+        if (terminal.Id == null)
+        {
+            _logger.LogError("Terminal ID is null");
+            throw new InvalidOperationException("Terminal ID is null");
+        }
+
         _logger.LogInformation("Logging in to terminal: {TerminalId}", terminal.Id);
 
         // Simulate login by generating a session ID
@@ -517,7 +522,7 @@ public class RedisTerminalService : ITerminalService
     /// <summary>
     /// Get terminal info from cache or create from configuration
     /// </summary>
-    private async Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
+    private TerminalInfo GetTerminalInfo(string terminalId)
     {
         if (string.IsNullOrEmpty(terminalId))
         {
@@ -556,7 +561,7 @@ public class RedisTerminalService : ITerminalService
         }
 
         _logger.LogWarning("Could not create terminal info for invalid terminal ID: {TerminalId}", terminalId);
-        return null!;
+        return null!; // Using null-forgiving operator as we properly check for null in calling code
     }
 
     /// <summary>
@@ -583,7 +588,7 @@ public class RedisTerminalService : ITerminalService
             // Get terminals that are in use (not in the pool)
             for (int i = 1; i <= terminalsData.Length; i++)
             {
-                string terminalId = $"{_config.TerminalIdPrefix}{i:000}";
+                string terminalId = $"{_config.TerminalIdPrefix}{i:0000}";
                 if (!terminalIds.Contains(terminalId))
                 {
                     inUseTerminalsTasks.Add(GetTerminalStatusAsync(terminalId));
@@ -649,12 +654,17 @@ public class RedisTerminalService : ITerminalService
             };
         }
 
+        // Get values with explicit type information to avoid null reference warnings
+        string status = GetHashValueString(hashEntries, "status", TerminalStatusConstants.Available);
+        string podName = GetHashValueString(hashEntries, "pod_name", string.Empty);
+        long lastUsedTime = GetHashValueLong(hashEntries, "last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
         return new TerminalStatus
         {
             TerminalId = terminalId,
-            Status = GetHashValue(hashEntries, "status", TerminalStatusConstants.Available),
-            PodName = GetHashValue(hashEntries, "pod_name", string.Empty),
-            LastUsedTime = GetHashValue(hashEntries, "last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            Status = status,
+            PodName = podName,
+            LastUsedTime = lastUsedTime
         };
     }
 
@@ -694,9 +704,9 @@ public class RedisTerminalService : ITerminalService
     }
 
     /// <summary>
-    /// Get value from HashEntry array safely
+    /// Get string value from HashEntry array safely
     /// </summary>
-    private T GetHashValue<T>(HashEntry[] entries, string name, T defaultValue = default)
+    private string GetHashValueString(HashEntry[] entries, string name, string defaultValue)
     {
         if (entries == null || string.IsNullOrEmpty(name))
         {
@@ -708,17 +718,36 @@ public class RedisTerminalService : ITerminalService
         {
             return defaultValue;
         }
-
+        
         try
         {
-            return typeof(T) switch
-            {
-                var t when t == typeof(string) => (T)(object)(entry.Value.ToString() ?? string.Empty),
-                var t when t == typeof(int) => (T)(object)(int)entry.Value,
-                var t when t == typeof(long) => (T)(object)(long)entry.Value,
-                var t when t == typeof(bool) => (T)(object)(bool)entry.Value,
-                _ => defaultValue
-            };
+            return entry.Value.ToString() ?? defaultValue;
+        }
+        catch
+        {
+            return defaultValue;
+        }
+    }
+
+    /// <summary>
+    /// Get long value from HashEntry array safely
+    /// </summary>
+    private long GetHashValueLong(HashEntry[] entries, string name, long defaultValue)
+    {
+        if (entries == null || string.IsNullOrEmpty(name))
+        {
+            return defaultValue;
+        }
+
+        var entry = entries.FirstOrDefault(h => string.Equals(h.Name, name, StringComparison.Ordinal));
+        if (entry.Equals(default(HashEntry)) || entry.Value.IsNull)
+        {
+            return defaultValue;
+        }
+        
+        try
+        {
+            return (long)entry.Value;
         }
         catch
         {

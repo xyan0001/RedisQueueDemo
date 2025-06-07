@@ -81,7 +81,7 @@ public class Program
         var stopwatch = Stopwatch.StartNew();
         for (int i = 1; i <= 40; i++)
         {
-            string terminalId = $"terminal-{i:000}";
+            string terminalId = $"terminal-{i:0000}";
             var terminal = await terminalService.AllocateTerminalAsync();
             if (terminal != null)
             {
@@ -104,7 +104,7 @@ public class Program
         for (int i = 0; i < 1000; i++)
         {
             int terminalNum = i % 40 + 1; // Cycle through all 40 terminals
-            string terminalId = $"terminal-{terminalNum:000}";
+            string terminalId = $"terminal-{terminalNum:0000}";
             if (i % 2 == 0)
             {
                 // Alternate between allocation and release to test both paths
