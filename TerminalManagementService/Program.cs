@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using TerminalManagementService.BackgroundServices;
 using TerminalManagementService.Models;
@@ -52,12 +51,12 @@ using (var scope = app.Services.CreateScope())
     try
     {
         await terminalService.InitializeTerminalsAsync();
-        
+
         // Preload terminal cache if service supports it
         if (terminalService is RedisTerminalService redisTerminalService)
         {
             await redisTerminalService.PreloadTerminalCacheAsync();
-            
+
             var metrics = redisTerminalService.GetCacheMetrics();
             var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
             logger.LogInformation("Terminal cache initialized with {Count} terminals", metrics.hits + metrics.misses);

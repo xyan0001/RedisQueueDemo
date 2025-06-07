@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using TerminalManagementService.Models;
 
 namespace TerminalManagementService.Services;
@@ -47,7 +46,7 @@ public interface ITerminalService
     /// Reclaim orphaned terminals
     /// </summary>
     Task ReclaimOrphanedTerminalsAsync();
-    
+
     /// <summary>
     /// Shutdown - release all terminals allocated by this pod
     /// </summary>

@@ -1,9 +1,4 @@
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
@@ -12,22 +7,16 @@ namespace TerminalManagementService.BackgroundServices;
 /// <summary>
 /// Background service to handle terminal cleanup and orphan reclamation
 /// </summary>
-public class TerminalCleanupService : BackgroundService
+public class TerminalCleanupService(
+    ITerminalService terminalService,
+    IOptions<TerminalConfiguration> config,
+    ILogger<TerminalCleanupService> logger)
+    : BackgroundService
 {
-    private readonly ITerminalService _terminalService;
-    private readonly ILogger<TerminalCleanupService> _logger;
-    private readonly TerminalConfiguration _config;
+    private readonly ITerminalService _terminalService = terminalService ?? throw new ArgumentNullException(nameof(terminalService));
+    private readonly ILogger<TerminalCleanupService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly TerminalConfiguration _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     private readonly TimeSpan _cleanupInterval = TimeSpan.FromSeconds(15);
-
-    public TerminalCleanupService(
-        ITerminalService terminalService,
-        IOptions<TerminalConfiguration> config,
-        ILogger<TerminalCleanupService> logger)
-    {
-        _terminalService = terminalService ?? throw new ArgumentNullException(nameof(terminalService));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
-    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
