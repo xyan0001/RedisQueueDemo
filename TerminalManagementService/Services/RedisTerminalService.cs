@@ -75,21 +75,20 @@ public class RedisTerminalService : ITerminalService
                         new HashEntry("password", terminal.Password)
                     };
                     await _db.HashSetAsync(infoKey, hashEntries);
-                    _logger.LogInformation("Created terminal info: {TerminalId}", terminalId);
-
-                    // Add to cache
+                    _logger.LogInformation("Created terminal info: {TerminalId}", terminalId);                    // Add to cache
                     _terminalInfoCache.TryAdd(terminalId, terminal);
                     _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
 
                     // Set initial status
-                    string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
-                    var statusHashEntries = new HashEntry[]
+                    var initialStatus = new TerminalStatus
                     {
-                        new HashEntry("status", TerminalStatusConstants.Available),
-                        new HashEntry("pod_id", string.Empty),
-                        new HashEntry("last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                        TerminalId = terminalId,
+                        Status = TerminalStatusConstants.Available,
+                        PodId = string.Empty,
+                        LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     };
-                    await _db.HashSetAsync(statusKey, statusHashEntries);
+                    
+                    await UpdateTerminalStatusAsync(initialStatus);
 
                     // Add to available pool
                     await _db.SetAddAsync(TerminalPoolKey, terminalId);
@@ -148,21 +147,20 @@ public class RedisTerminalService : ITerminalService
                         new HashEntry("password", terminal.Password)
                     };
                     await _db.HashSetAsync(infoKey, hashEntries);
-                    _logger.LogInformation("Created new terminal info: {TerminalId}", terminalId);
-
-                    // Add to cache
+                    _logger.LogInformation("Created new terminal info: {TerminalId}", terminalId);                    // Add to cache
                     _terminalInfoCache.TryAdd(terminalId, terminal);
                     _logger.LogDebug("New terminal info added to cache: {TerminalId}", terminalId);
 
                     // Set initial status
-                    string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
-                    var statusHashEntries = new HashEntry[]
+                    var initialStatus = new TerminalStatus
                     {
-                        new HashEntry("status", TerminalStatusConstants.Available),
-                        new HashEntry("pod_id", string.Empty),
-                        new HashEntry("last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                        TerminalId = terminalId,
+                        Status = TerminalStatusConstants.Available,
+                        PodId = string.Empty,
+                        LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     };
-                    await _db.HashSetAsync(statusKey, statusHashEntries);
+                    
+                    await UpdateTerminalStatusAsync(initialStatus);
 
                     // Add to available pool
                     await _db.SetAddAsync(TerminalPoolKey, terminalId);
@@ -188,33 +186,31 @@ public class RedisTerminalService : ITerminalService
     /// </summary>
     public async Task<TerminalInfo> AllocateTerminalAsync()
     {
-        _logger.LogInformation("Attempting to allocate a terminal");
-
-        try
+        _logger.LogInformation("Attempting to allocate a terminal");        try
         {
             // Atomically pop a terminal from the available pool
             var terminalId = await _db.SetPopAsync(TerminalPoolKey);
             if (terminalId.IsNull)
             {
                 _logger.LogWarning("No terminals available in the pool");
-                return null;
+                return null!; // Using null-forgiving operator as we properly check for null in calling code
             }
-
+            
             string id = terminalId.ToString();
             _logger.LogInformation("Allocated terminal: {TerminalId}", id);
 
             // Update terminal status
-            string statusKey = string.Format(TerminalStatusKeyPattern, id);
             var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            var statusHashEntries = new HashEntry[]
+            var status = new TerminalStatus
             {
-                new HashEntry("status", TerminalStatusConstants.InUse),
-                new HashEntry("pod_id", _podId),
-                new HashEntry("last_used_time", currentTime)
+                TerminalId = id,
+                Status = TerminalStatusConstants.InUse,
+                PodId = _podId,
+                LastUsedTime = currentTime
             };
-            await _db.HashSetAsync(statusKey, statusHashEntries);
-
+            
+            await UpdateTerminalStatusAsync(status);
+            
             // Get terminal info from cache or Redis
             var terminalInfo = await GetTerminalInfoAsync(id);
             if (terminalInfo == null)
@@ -222,7 +218,7 @@ public class RedisTerminalService : ITerminalService
                 _logger.LogError("Failed to get terminal info for allocated terminal: {TerminalId}", id);
                 // Return the terminal to the pool
                 await _db.SetAddAsync(TerminalPoolKey, id);
-                return null;
+                return null!; // Using null-forgiving operator as we properly check for null in calling code
             }
 
             return terminalInfo;
@@ -232,9 +228,7 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error allocating terminal");
             throw;
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Release a terminal back to the pool
     /// </summary>
     public async Task ReleaseTerminalAsync(string terminalId)
@@ -244,17 +238,16 @@ public class RedisTerminalService : ITerminalService
         try
         {
             // Update status to available
-            string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
             var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            var statusHashEntries = new HashEntry[]
+            var status = new TerminalStatus
             {
-                new HashEntry("status", TerminalStatusConstants.Available),
-                new HashEntry("pod_id", string.Empty),
-                new HashEntry("last_used_time", currentTime)
+                TerminalId = terminalId,
+                Status = TerminalStatusConstants.Available,
+                PodId = string.Empty,
+                LastUsedTime = currentTime
             };
 
-            await _db.HashSetAsync(statusKey, statusHashEntries);
+            await UpdateTerminalStatusAsync(status);
 
             // Add back to available pool
             await _db.SetAddAsync(TerminalPoolKey, terminalId);
@@ -266,13 +259,16 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error releasing terminal: {TerminalId}", terminalId);
             throw;
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Get or create a session for a terminal
     /// </summary>
     public async Task<string> GetOrCreateSessionAsync(string terminalId)
     {
+        if (string.IsNullOrEmpty(terminalId))
+        {
+            throw new ArgumentNullException(nameof(terminalId));
+        }
+
         string sessionKey = string.Format(TerminalSessionKeyPattern, terminalId);
 
         try
@@ -284,7 +280,7 @@ public class RedisTerminalService : ITerminalService
                 // Refresh session TTL
                 await _db.KeyExpireAsync(sessionKey, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
                 _logger.LogInformation("Reusing existing session for terminal: {TerminalId}", terminalId);
-                return sessionId;
+                return sessionId.ToString();
             } // No existing session, create new one
 
             _logger.LogInformation("Creating new session for terminal: {TerminalId}", terminalId);
@@ -335,19 +331,16 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error refreshing session for terminal: {TerminalId}", terminalId);
             throw;
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Update the last used time for a terminal
     /// </summary>
     public async Task UpdateLastUsedTimeAsync(string terminalId)
     {
         try
         {
-            string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
-            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            await _db.HashSetAsync(statusKey, "last_used_time", currentTime);
+            var status = await GetTerminalStatusAsync(terminalId);
+            status.LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            await UpdateTerminalStatusAsync(status);
             _logger.LogDebug("Updated last_used_time for terminal: {TerminalId}", terminalId);
         }
         catch (Exception ex)
@@ -355,9 +348,7 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error updating last_used_time for terminal: {TerminalId}", terminalId);
             throw;
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Reclaim orphaned terminals
     /// </summary>
     public async Task ReclaimOrphanedTerminalsAsync()
@@ -376,24 +367,19 @@ public class RedisTerminalService : ITerminalService
             foreach (var key in keys)
             {
                 string terminalId = key.ToString().Replace("terminal:status:", "");
-                var hashEntries = await _db.HashGetAllAsync(key);
+                var terminalStatus = await GetTerminalStatusAsync(terminalId);
 
-                string status = GetHashValue<string>(hashEntries, "status", TerminalStatusConstants.Available);
-                long lastUsed = GetHashValue<long>(hashEntries, "last_used_time", 0);
-
-                if (status == TerminalStatusConstants.InUse && lastUsed < timeoutThreshold)
+                if (terminalStatus.Status == TerminalStatusConstants.InUse && 
+                    terminalStatus.LastUsedTime < timeoutThreshold)
                 {
                     _logger.LogWarning("Reclaiming orphaned terminal: {TerminalId}", terminalId);
 
                     // Update status
-                    var statusHashEntries = new HashEntry[]
-                    {
-                        new HashEntry("status", TerminalStatusConstants.Available),
-                        new HashEntry("pod_id", string.Empty),
-                        new HashEntry("last_used_time", currentTime)
-                    };
+                    terminalStatus.Status = TerminalStatusConstants.Available;
+                    terminalStatus.PodId = string.Empty;
+                    terminalStatus.LastUsedTime = currentTime;
 
-                    await _db.HashSetAsync(key, statusHashEntries);
+                    await UpdateTerminalStatusAsync(terminalStatus);
 
                     // Add back to available pool
                     await _db.SetAddAsync(TerminalPoolKey, terminalId);
@@ -405,9 +391,7 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error reclaiming orphaned terminals");
             throw;
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Shutdown - release all terminals allocated by this pod
     /// </summary>
     public async Task ShutdownAsync()
@@ -422,14 +406,13 @@ public class RedisTerminalService : ITerminalService
 
             foreach (var key in keys)
             {
-                var hashEntries = await _db.HashGetAllAsync(key);
-                string status = GetHashValue<string>(hashEntries, "status", TerminalStatusConstants.Available);
-                string podId = GetHashValue<string>(hashEntries, "pod_id", string.Empty);
+                string terminalId = key.ToString().Replace("terminal:status:", "");
+                var terminalStatus = await GetTerminalStatusAsync(terminalId);
 
                 // Check if this terminal is allocated to this pod
-                if (status == TerminalStatusConstants.InUse && podId == _podId)
+                if (terminalStatus.Status == TerminalStatusConstants.InUse && 
+                    terminalStatus.PodId == _podId)
                 {
-                    string terminalId = key.ToString().Replace("terminal:status:", "");
                     _logger.LogInformation("Releasing terminal on shutdown: {TerminalId}", terminalId);
 
                     // Release terminal
@@ -444,14 +427,17 @@ public class RedisTerminalService : ITerminalService
             _logger.LogError(ex, "Error during shutdown terminal release");
             // Don't throw here to allow shutdown to continue
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Login to a terminal and get session ID
     /// This method would be implemented based on the specific terminal system
     /// </summary>
     private async Task<string> LoginToTerminalAsync(TerminalInfo terminal)
     {
+        if (terminal == null)
+        {
+            throw new ArgumentNullException(nameof(terminal));
+        }
+
         // This is a placeholder for the actual terminal login implementation
         // In a real system, this would connect to the terminal using the provided credentials
 
@@ -467,13 +453,16 @@ public class RedisTerminalService : ITerminalService
         _logger.LogInformation("Login successful for terminal: {TerminalId}", terminal.Id);
 
         return sessionId;
-    }
-
-    /// <summary>
+    }/// <summary>
     /// Get terminal info from cache or Redis
     /// </summary>
     private async Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
     {
+        if (string.IsNullOrEmpty(terminalId))
+        {
+            throw new ArgumentNullException(nameof(terminalId));
+        }
+
         // Try to get from cache first
         if (_terminalInfoCache.TryGetValue(terminalId, out var cachedInfo))
         {
@@ -491,7 +480,7 @@ public class RedisTerminalService : ITerminalService
         if (hashEntries.Length == 0)
         {
             _logger.LogWarning("Terminal info not found in Redis: {TerminalId}", terminalId);
-            return null;
+            return null!; // Using null-forgiving operator as we'll handle null checks in calling methods
         }
 
         var terminalInfo = new TerminalInfo
@@ -563,14 +552,18 @@ public class RedisTerminalService : ITerminalService
         {
             _logger.LogError(ex, "Error preloading terminal cache. System will continue with empty cache.");
         }
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Get value from HashEntry array safely
     /// </summary>
-    private T GetHashValue<T>(HashEntry[] entries, string name, T defaultValue = default)
+#pragma warning disable CS8601 // Possible null reference assignment
+    private T GetHashValue<T>(HashEntry[]? entries, string? name, T defaultValue = default)
     {
-        var entry = entries.FirstOrDefault(h => h.Name == name);
+        if (entries == null || string.IsNullOrEmpty(name))
+        {
+            return defaultValue;
+        }
+
+        var entry = entries.FirstOrDefault(h => string.Equals(h.Name, name, StringComparison.Ordinal));
         if (entry.Equals(default(HashEntry)) || entry.Value.IsNull)
         {
             return defaultValue;
@@ -578,39 +571,79 @@ public class RedisTerminalService : ITerminalService
 
         try
         {
-            if (typeof(T) == typeof(string))
+            return typeof(T) switch
             {
-                return (T)(object)(entry.Value.ToString() ?? string.Empty);
-            }
-            else if (typeof(T) == typeof(int))
-            {
-                return (T)(object)(int)entry.Value;
-            }
-            else if (typeof(T) == typeof(long))
-            {
-                return (T)(object)(long)entry.Value;
-            }
-            else if (typeof(T) == typeof(bool))
-            {
-                return (T)(object)(bool)entry.Value;
-            }
-            else
-            {
-                return defaultValue;
-            }
+                var t when t == typeof(string) => (T)(object)(entry.Value.ToString() ?? string.Empty),
+                var t when t == typeof(int) => (T)(object)(int)entry.Value,
+                var t when t == typeof(long) => (T)(object)(long)entry.Value,
+                var t when t == typeof(bool) => (T)(object)(bool)entry.Value,
+                _ => defaultValue
+            };
         }
         catch
         {
             return defaultValue;
         }
     }
-
-    // Cache metrics
+#pragma warning restore CS8601 // Possible null reference assignment// Cache metrics
     private long _cacheHits = 0;
-    private long _cacheMisses = 0;
+    private long _cacheMisses = 0;    /// <summary>
+    /// Get status information for a terminal
+    /// </summary>
+    public async Task<TerminalStatus> GetTerminalStatusAsync(string terminalId)
+    {
+        if (string.IsNullOrEmpty(terminalId))
+        {
+            throw new ArgumentNullException(nameof(terminalId));
+        }
+
+        string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
+        var hashEntries = await _db.HashGetAllAsync(statusKey);
+        
+        if (hashEntries.Length == 0)
+        {
+            return new TerminalStatus
+            {
+                TerminalId = terminalId,
+                Status = TerminalStatusConstants.Available,
+                PodId = string.Empty,
+                LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+        }
+
+        return new TerminalStatus
+        {
+            TerminalId = terminalId,
+            Status = GetHashValue<string>(hashEntries, "status", TerminalStatusConstants.Available),
+            PodId = GetHashValue<string>(hashEntries, "pod_id", string.Empty),
+            LastUsedTime = GetHashValue<long>(hashEntries, "last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+        };
+    }
 
     /// <summary>
-    /// Get cache performance metrics    /// </summary>
+    /// Update status for a terminal
+    /// </summary>
+    public async Task UpdateTerminalStatusAsync(TerminalStatus status)
+    {
+        if (status == null)
+        {
+            throw new ArgumentNullException(nameof(status));
+        }
+
+        string statusKey = string.Format(TerminalStatusKeyPattern, status.TerminalId);
+        var statusHashEntries = new HashEntry[]
+        {
+            new HashEntry("status", status.Status),
+            new HashEntry("pod_id", status.PodId),
+            new HashEntry("last_used_time", status.LastUsedTime)
+        };
+
+        await _db.HashSetAsync(statusKey, statusHashEntries);
+        _logger.LogDebug("Updated terminal status for {TerminalId}: {Status}", status.TerminalId, status.Status);
+    }
+
+    /// <summary>    /// Get cache performance metrics
+    /// </summary>
     public (long hits, long misses, double hitRate) GetCacheMetrics()
     {
         long hits = _cacheHits;

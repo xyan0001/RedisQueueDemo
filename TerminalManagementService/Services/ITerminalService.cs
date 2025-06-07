@@ -56,4 +56,14 @@ public interface ITerminalService
     /// Get cache performance metrics
     /// </summary>
     (long hits, long misses, double hitRate) GetCacheMetrics();
+
+    /// <summary>
+    /// Get status information for a terminal
+    /// </summary>
+    Task<TerminalStatus> GetTerminalStatusAsync(string terminalId);
+
+    /// <summary>
+    /// Update status for a terminal
+    /// </summary>
+    Task UpdateTerminalStatusAsync(TerminalStatus status);
 }
