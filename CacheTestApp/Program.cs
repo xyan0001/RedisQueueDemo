@@ -76,14 +76,12 @@ public class Program
 
     private static async Task RunCacheTest(ITerminalService terminalService)
     {
-        Console.WriteLine("\nRunning cache performance tests...");
-
-        // First access to each terminal (should be cache misses)
+        Console.WriteLine("\nRunning cache performance tests...");        // First access to each terminal (should be cache misses)
         Console.WriteLine("\nTest 1: First access to all terminals");
         var stopwatch = Stopwatch.StartNew();
-        for (int i = 1; i <= 40; i++)
+        for (int i = 4850; i <= 4889; i++) // Using actual terminal IDs from 4850 to 4889
         {
-            string terminalId = $"terminal-{i:0000}";
+            string terminalId = $"terminal-{i}";
             var terminal = await terminalService.AllocateTerminalAsync();
             if (terminal != null)
             {
@@ -101,12 +99,12 @@ public class Program
 
         // Second test: repeated access (should be mostly cache hits)
         Console.WriteLine("\nTest 2: Repeated access with caching (1000 operations)");
-        stopwatch.Restart();
-
-        for (int i = 0; i < 1000; i++)
+        stopwatch.Restart();        for (int i = 0; i < 1000; i++)
         {
-            int terminalNum = i % 40 + 1; // Cycle through all 40 terminals
-            string terminalId = $"terminal-{terminalNum:0000}";
+            // Use the actual terminal IDs (from 4850 to 4889)
+            int terminalOffset = i % 40; // 0 to 39
+            int terminalNum = 4850 + terminalOffset; // Maps to 4850-4889
+            string terminalId = $"terminal-{terminalNum}";
             if (i % 2 == 0)
             {
                 // Alternate between allocation and release to test both paths

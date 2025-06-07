@@ -454,3 +454,10 @@ Potential enhancements to the caching system:
 4. **Circuit Breaker**: Add circuit breaker pattern for Redis operations
 5. **Distributed Caching**: Consider distributed caching solutions for multi-pod deployments
 6. **Custom Cache Metrics**: Add Prometheus metrics for detailed monitoring
+
+## Redis commands
+
+1. Get a session ID for a terminal:
+   ```redis
+   GET terminal:session:terminal-001
+   ```

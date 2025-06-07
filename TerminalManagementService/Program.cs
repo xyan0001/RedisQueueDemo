@@ -1,5 +1,4 @@
 using StackExchange.Redis;
-using TerminalManagementService.BackgroundServices;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
@@ -28,7 +27,7 @@ builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
 
 // Register services
 builder.Services.AddSingleton<ITerminalService, RedisTerminalService>();
-builder.Services.AddHostedService<TerminalCleanupService>();
+//builder.Services.AddHostedService<TerminalCleanupService>();
 
 // Add health checks
 builder.Services.AddHealthChecks();
@@ -42,11 +41,11 @@ if (initializeRedisOnly)
     {
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         logger.LogInformation("Running in Redis initialization mode");
-        
+
         try
         {
             var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
-            
+
             // Force initialization regardless of configuration setting
             logger.LogInformation("Initializing Redis terminals...");
             await terminalService.InitializeTerminalsAsync();
@@ -57,7 +56,7 @@ if (initializeRedisOnly)
             logger.LogError(ex, "Error initializing Redis");
             Environment.ExitCode = 1;
         }
-        
+
         return; // Exit the application after initialization
     }
 }

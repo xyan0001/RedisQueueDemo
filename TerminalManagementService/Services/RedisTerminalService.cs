@@ -70,21 +70,26 @@ public class RedisTerminalService : ITerminalService
 
             _logger.LogInformation("Found {Count} terminals in configuration", terminalsData.Length);
 
-            int index = 0;
             foreach (var terminalDataString in terminalsData)
             {
-                index++;
-                string terminalId = $"{_config.TerminalIdPrefix}{index:0000}";
-                string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
-
                 // Parse terminal data string
-                // Format: Address|Port|Username|Password|DataPort|Branch
+                // Format: Address|Port|Username|Password|TerminalId|Branch
                 var parts = terminalDataString.Split('|');
                 if (parts.Length < 6)
                 {
-                    _logger.LogWarning("Invalid terminal data format for entry {Index}: {Data}", index, terminalDataString);
+                    _logger.LogWarning("Invalid terminal data format for entry: {Data}", terminalDataString);
                     continue;
                 }
+
+                // Extract terminal ID from the data string (5th element)
+                if (!int.TryParse(parts[4], out int terminalNumber))
+                {
+                    _logger.LogWarning("Invalid terminal ID in data: {Data}", terminalDataString);
+                    continue;
+                }
+
+                string terminalId = $"{_config.TerminalIdPrefix}{terminalNumber}";
+                string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
 
                 // Check if this terminal already exists
                 bool exists = await _db.KeyExistsAsync(statusKey);
@@ -156,18 +161,32 @@ public class RedisTerminalService : ITerminalService
             int maxIndex = Math.Min(startIndex + count - 1, terminalsData.Length);
             for (int i = startIndex; i <= maxIndex; i++)
             {
-                string terminalId = $"{_config.TerminalIdPrefix}{i:0000}";
+                // Get the terminal data entry (adjusting for 0-based array)
+                string terminalDataEntry = terminalsData[i - 1];
+                var parts = terminalDataEntry.Split('|');
+
+                if (parts.Length < 6)
+                {
+                    _logger.LogWarning("Invalid terminal data format: {Data}", terminalDataEntry);
+                    continue;
+                }
+
+                // Extract terminal ID from the data string (5th element)
+                if (!int.TryParse(parts[4], out int terminalNumber))
+                {
+                    _logger.LogWarning("Invalid terminal ID in data: {Data}", terminalDataEntry);
+                    continue;
+                }
+
+                string terminalId = $"{_config.TerminalIdPrefix}{terminalNumber}";
                 string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
 
                 // Check if this terminal already exists
                 bool exists = await _db.KeyExistsAsync(statusKey);
                 if (!exists)
                 {
-                    // Get the terminal data entry
-                    string terminalDataString = terminalsData[i - 1]; // Adjust for 0-based array
-
                     // Create terminal info for cache only - no need to store in Redis
-                    var terminal = CreateTerminalInfoFromString(terminalId, terminalDataString);
+                    var terminal = CreateTerminalInfoFromString(terminalId, terminalDataEntry);
 
                     // Add to cache
                     _terminalInfoCache.TryAdd(terminalId, terminal);
@@ -498,7 +517,7 @@ public class RedisTerminalService : ITerminalService
 
     /// <summary>
     /// Create a terminal info object from a data string
-    /// Format: Address|Port|Username|Password|DataPort|Branch
+    /// Format: Address|Port|Username|Password|TerminalId|Branch
     /// </summary>
     private TerminalInfo CreateTerminalInfoFromString(string terminalId, string dataString)
     {
@@ -543,20 +562,27 @@ public class RedisTerminalService : ITerminalService
 
         // Extract terminal number from terminalId
         if (terminalId.StartsWith(_config.TerminalIdPrefix) &&
-            int.TryParse(terminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalNumber))
+            int.TryParse(terminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalId_value))
         {
             // Get terminals data from configuration
             var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
-            if (terminalsData != null && terminalNumber <= terminalsData.Length)
+            if (terminalsData != null)
             {
-                var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
-                var terminalInfo = CreateTerminalInfoFromString(terminalId, terminalDataString);
+                // Search for terminal data with matching terminal ID
+                foreach (var terminalDataString in terminalsData)
+                {
+                    var parts = terminalDataString.Split('|');
+                    if (parts.Length >= 6 && int.TryParse(parts[4], out int currentId) && currentId == terminalId_value)
+                    {
+                        var terminalInfo = CreateTerminalInfoFromString(terminalId, terminalDataString);
 
-                // Add to cache
-                _terminalInfoCache.TryAdd(terminalId, terminalInfo);
-                _logger.LogDebug("Terminal info created and added to cache: {TerminalId}", terminalId);
+                        // Add to cache
+                        _terminalInfoCache.TryAdd(terminalId, terminalInfo);
+                        _logger.LogDebug("Terminal info created and added to cache: {TerminalId}", terminalId);
 
-                return terminalInfo;
+                        return terminalInfo;
+                    }
+                }
             }
         }
 
@@ -575,7 +601,6 @@ public class RedisTerminalService : ITerminalService
         {
             // Get all terminals from the pool
             var terminalIds = await _db.SetMembersAsync(TerminalPoolKey);
-            var inUseTerminalsTasks = new List<Task<TerminalStatus>>();
 
             // Get terminals data from configuration
             var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
@@ -585,40 +610,40 @@ public class RedisTerminalService : ITerminalService
                 return;
             }
 
-            // Get terminals that are in use (not in the pool)
-            for (int i = 1; i <= terminalsData.Length; i++)
+            // Dictionary to map terminal IDs to their data
+            var terminalDataById = new Dictionary<string, string>();
+            foreach (var terminalDataString in terminalsData)
             {
-                string terminalId = $"{_config.TerminalIdPrefix}{i:0000}";
-                if (!terminalIds.Contains(terminalId))
+                var parts = terminalDataString.Split('|');
+                if (parts.Length >= 6 && int.TryParse(parts[4], out int terminalNumber))
                 {
-                    inUseTerminalsTasks.Add(GetTerminalStatusAsync(terminalId));
+                    string formattedId = $"{_config.TerminalIdPrefix}{terminalNumber}";
+                    terminalDataById[formattedId] = terminalDataString;
                 }
             }
 
-            // Wait for all status checks to complete
-            var inUseTerminals = await Task.WhenAll(inUseTerminalsTasks);
-
-            // Preload terminal info for all terminals in the pool
+            // Process terminals in the pool
             foreach (var terminalId in terminalIds)
             {
-                if (int.TryParse(terminalId.ToString().Substring(_config.TerminalIdPrefix.Length), out int terminalNumber) &&
-                    terminalNumber > 0 && terminalNumber <= terminalsData.Length)
+                string id = terminalId.ToString();
+                if (terminalDataById.TryGetValue(id, out var terminalDataString))
                 {
-                    var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
-                    var terminalInfo = CreateTerminalInfoFromString(terminalId.ToString(), terminalDataString);
-                    _terminalInfoCache.TryAdd(terminalId.ToString(), terminalInfo);
+                    var terminalInfo = CreateTerminalInfoFromString(id, terminalDataString);
+                    _terminalInfoCache.TryAdd(id, terminalInfo);
                 }
             }
 
-            // Also preload for in-use terminals
-            foreach (var status in inUseTerminals.Where(s => s != null))
+            // Process terminals that are in use (not in the pool)
+            var server = _redis.GetServer(_redis.GetEndPoints().First());
+            var statusKeys = server.Keys(pattern: "terminal:status:*")
+                .Select(k => k.ToString().Replace("terminal:status:", ""));
+
+            foreach (var id in statusKeys)
             {
-                if (int.TryParse(status.TerminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalNumber) &&
-                    terminalNumber > 0 && terminalNumber <= terminalsData.Length)
+                if (!terminalIds.Contains(id) && terminalDataById.TryGetValue(id, out var terminalDataString))
                 {
-                    var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
-                    var terminalInfo = CreateTerminalInfoFromString(status.TerminalId, terminalDataString);
-                    _terminalInfoCache.TryAdd(status.TerminalId, terminalInfo);
+                    var terminalInfo = CreateTerminalInfoFromString(id, terminalDataString);
+                    _terminalInfoCache.TryAdd(id, terminalInfo);
                 }
             }
 
@@ -718,7 +743,7 @@ public class RedisTerminalService : ITerminalService
         {
             return defaultValue;
         }
-        
+
         try
         {
             return entry.Value.ToString() ?? defaultValue;
@@ -744,7 +769,7 @@ public class RedisTerminalService : ITerminalService
         {
             return defaultValue;
         }
-        
+
         try
         {
             return (long)entry.Value;
