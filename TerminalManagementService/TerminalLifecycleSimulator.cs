@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
 namespace TerminalManagementService;
@@ -8,10 +7,12 @@ namespace TerminalManagementService;
 /// <summary>
 /// Terminal Lifecycle Simulator - demonstrates the terminal allocation, usage, and release cycle
 /// </summary>
-public class TerminalLifecycleSimulator
+public class TerminalLifecycleSimulator(
+    ITerminalService terminalService,
+    ILogger<TerminalLifecycleSimulator> logger)
 {
-    private readonly ITerminalService _terminalService;
-    private readonly ILogger<TerminalLifecycleSimulator> _logger;
+    private readonly ITerminalService _terminalService = terminalService ?? throw new ArgumentNullException(nameof(terminalService));
+    private readonly ILogger<TerminalLifecycleSimulator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     private readonly Stopwatch _stopwatch = new();
 
     // Statistics tracking
@@ -19,14 +20,6 @@ public class TerminalLifecycleSimulator
     private int _failedOperations = 0;
     private List<double> _operationTimes = new();
     private readonly object _lockObject = new();
-
-    public TerminalLifecycleSimulator(
-        ITerminalService terminalService,
-        ILogger<TerminalLifecycleSimulator> logger)
-    {
-        _terminalService = terminalService ?? throw new ArgumentNullException(nameof(terminalService));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
 
     /// <summary>
     /// Run a simulation of multiple terminal lifecycle operations
@@ -120,10 +113,13 @@ public class TerminalLifecycleSimulator
 
             // Step 3: Simulate using the terminal (making a request)
             await Task.Delay(simulatedUsageTimeMs);
-            
+
+            // Refresh the session to keep it active
+            await _terminalService.RefreshSessionAsync(terminal.Id);
+
             // Update last used time to show activity
             await _terminalService.UpdateLastUsedTimeAsync(terminal.Id);
-            
+
             // Step 4: Release the terminal back to the pool
             await _terminalService.ReleaseTerminalAsync(terminal.Id);
 
