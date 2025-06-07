@@ -24,6 +24,12 @@ bld/
 [Ll]og/
 [Ll]ogs/
 
+# Explicitly target specific obj folders to ensure they're excluded
+**/obj/**
+**/bin/**
+**/Debug/**
+**/Release/**
+
 # Visual Studio files
 .vs/
 *.userprefs
