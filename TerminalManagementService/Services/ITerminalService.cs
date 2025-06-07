@@ -46,11 +46,14 @@ namespace TerminalManagementService.Services
         /// <summary>
         /// Reclaim orphaned terminals
         /// </summary>
-        Task ReclaimOrphanedTerminalsAsync();
-
-        /// <summary>
+        Task ReclaimOrphanedTerminalsAsync();        /// <summary>
         /// Shutdown - release all terminals allocated by this pod
         /// </summary>
         Task ShutdownAsync();
+
+        /// <summary>
+        /// Get cache performance metrics
+        /// </summary>
+        (long hits, long misses, double hitRate) GetCacheMetrics();
     }
 }

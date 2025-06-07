@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
+using TerminalManagementService;
 
 namespace TerminalManagementService.Controllers
 {
@@ -60,6 +61,60 @@ namespace TerminalManagementService.Controllers
             {
                 _logger.LogError(ex, "Error cleaning up terminals");
                 return StatusCode(500, "Error cleaning up terminals");
+            }
+        }
+
+        /// <summary>
+        /// Get cache metrics
+        /// </summary>
+        [HttpGet("cache/metrics")]
+        public IActionResult GetCacheMetrics()
+        {
+            try
+            {
+                var metrics = _terminalService.GetCacheMetrics();
+                return Ok(new 
+                { 
+                    Hits = metrics.hits,
+                    Misses = metrics.misses,
+                    HitRate = Math.Round(metrics.hitRate, 2),
+                    TotalRequests = metrics.hits + metrics.misses,
+                    CacheStatus = metrics.hits + metrics.misses > 0 ? "Active" : "No requests yet"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting cache metrics");
+                return StatusCode(500, "Error getting cache metrics");
+            }
+        }        /// <summary>
+        /// Run cache performance test
+        /// </summary>
+        [HttpGet("cache/performance-test")]
+        public async Task<IActionResult> RunCachePerformanceTest()
+        {
+            try
+            {
+                // Create an instance of the test class and run tests with the existing terminal service
+                await new CachePerformanceTest(_terminalService, _logger).RunTestsAsync();
+                
+                // Get updated metrics
+                var metrics = _terminalService.GetCacheMetrics();
+                
+                return Ok(new { 
+                    Message = "Cache performance test completed successfully",
+                    Metrics = new {
+                        Hits = metrics.hits,
+                        Misses = metrics.misses,
+                        HitRate = Math.Round(metrics.hitRate, 2),
+                        TotalRequests = metrics.hits + metrics.misses
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error running cache performance test");
+                return StatusCode(500, "Error running cache performance test");
             }
         }
     }

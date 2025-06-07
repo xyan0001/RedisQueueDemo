@@ -19,7 +19,9 @@ builder.Services.Configure<TerminalConfiguration>(
 builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
 {
     var connectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    return ConnectionMultiplexer.Connect(connectionString);
+    var options = ConfigurationOptions.Parse(connectionString);
+    options.AbortOnConnectFail = false; // Don't throw if Redis is unavailable
+    return ConnectionMultiplexer.Connect(options);
 });
 
 // Register services
@@ -42,5 +44,30 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
+
+// Initialize terminals and preload cache
+using (var scope = app.Services.CreateScope())
+{
+    var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
+    try
+    {
+        await terminalService.InitializeTerminalsAsync();
+        
+        // Preload terminal cache if service supports it
+        if (terminalService is RedisTerminalService redisTerminalService)
+        {
+            await redisTerminalService.PreloadTerminalCacheAsync();
+            
+            var metrics = redisTerminalService.GetCacheMetrics();
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            logger.LogInformation("Terminal cache initialized with {Count} terminals", metrics.hits + metrics.misses);
+        }
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Error initializing terminals or preloading cache");
+    }
+}
 
 app.Run();

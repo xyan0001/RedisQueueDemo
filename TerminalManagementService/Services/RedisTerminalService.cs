@@ -2,29 +2,29 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TerminalManagementService.Models;
 
 namespace TerminalManagementService.Services
 {
     public class RedisTerminalService : ITerminalService
-    {
-        private readonly ConnectionMultiplexer _redis;
+    {        private readonly ConnectionMultiplexer _redis;
         private readonly IDatabase _db;
         private readonly ILogger<RedisTerminalService> _logger;
         private readonly TerminalConfiguration _config;
         private readonly string _podId;
+        private readonly ConcurrentDictionary<string, TerminalInfo> _terminalInfoCache;
 
         // Redis key patterns
         private const string TerminalInfoKeyPattern = "terminal:info:{0}";
         private const string TerminalStatusKeyPattern = "terminal:status:{0}";
         private const string TerminalSessionKeyPattern = "terminal:session:{0}";
-        private const string TerminalPoolKey = "terminal_pool";
-
-        public RedisTerminalService(
+        private const string TerminalPoolKey = "terminal_pool";        public RedisTerminalService(
             ConnectionMultiplexer redis,
             IOptions<TerminalConfiguration> config,
             ILogger<RedisTerminalService> logger)
@@ -33,9 +33,12 @@ namespace TerminalManagementService.Services
             _db = _redis.GetDatabase();
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+            _terminalInfoCache = new ConcurrentDictionary<string, TerminalInfo>();
             
             // Get pod ID from environment variable (set by Kubernetes)
             _podId = Environment.GetEnvironmentVariable("POD_NAME") ?? Guid.NewGuid().ToString();
+            
+            _logger.LogInformation("RedisTerminalService initialized with terminal info caching enabled");
         }
 
         /// <summary>
@@ -74,10 +77,12 @@ namespace TerminalManagementService.Services
                             new HashEntry("port", terminal.Port),
                             new HashEntry("username", terminal.Username),
                             new HashEntry("password", terminal.Password)
-                        };
-
-                        await _db.HashSetAsync(infoKey, hashEntries);
+                        };                        await _db.HashSetAsync(infoKey, hashEntries);
                         _logger.LogInformation("Created terminal info: {TerminalId}", terminalId);
+
+                        // Add to cache
+                        _terminalInfoCache.TryAdd(terminalId, terminal);
+                        _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
 
                         // Set initial status
                         string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
@@ -144,10 +149,12 @@ namespace TerminalManagementService.Services
                             new HashEntry("port", terminal.Port),
                             new HashEntry("username", terminal.Username),
                             new HashEntry("password", terminal.Password)
-                        };
-
-                        await _db.HashSetAsync(infoKey, hashEntries);
+                        };                        await _db.HashSetAsync(infoKey, hashEntries);
                         _logger.LogInformation("Created new terminal info: {TerminalId}", terminalId);
+
+                        // Add to cache
+                        _terminalInfoCache.TryAdd(terminalId, terminal);
+                        _logger.LogDebug("New terminal info added to cache: {TerminalId}", terminalId);
 
                         // Set initial status
                         string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
@@ -208,21 +215,17 @@ namespace TerminalManagementService.Services
                     new HashEntry("pod_id", _podId),
                     new HashEntry("last_used_time", currentTime)
                 };
-                
-                await _db.HashSetAsync(statusKey, statusHashEntries);
+                  await _db.HashSetAsync(statusKey, statusHashEntries);
 
-                // Get terminal info
-                string infoKey = string.Format(TerminalInfoKeyPattern, id);
-                var hashEntries = await _db.HashGetAllAsync(infoKey);
-                
-                var terminalInfo = new TerminalInfo
+                // Get terminal info from cache or Redis
+                var terminalInfo = await GetTerminalInfoAsync(id);
+                if (terminalInfo == null)
                 {
-                    Id = id,
-                    Url = hashEntries.FirstOrDefault(h => h.Name == "url").Value,
-                    Port = (int)hashEntries.FirstOrDefault(h => h.Name == "port").Value,
-                    Username = hashEntries.FirstOrDefault(h => h.Name == "username").Value,
-                    Password = hashEntries.FirstOrDefault(h => h.Name == "password").Value
-                };
+                    _logger.LogError("Failed to get terminal info for allocated terminal: {TerminalId}", id);
+                    // Return the terminal to the pool
+                    await _db.SetAddAsync(TerminalPoolKey, id);
+                    return null;
+                }
 
                 return terminalInfo;
             }
@@ -284,23 +287,16 @@ namespace TerminalManagementService.Services
                     await _db.KeyExpireAsync(sessionKey, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
                     _logger.LogInformation("Reusing existing session for terminal: {TerminalId}", terminalId);
                     return sessionId;
-                }
-
-                // No existing session, create new one
+                }                // No existing session, create new one
                 _logger.LogInformation("Creating new session for terminal: {TerminalId}", terminalId);
                 
-                // Get terminal info
-                string infoKey = string.Format(TerminalInfoKeyPattern, terminalId);
-                var hashEntries = await _db.HashGetAllAsync(infoKey);
-                
-                var terminalInfo = new TerminalInfo
+                // Get terminal info from cache or Redis
+                var terminalInfo = await GetTerminalInfoAsync(terminalId);
+                if (terminalInfo == null)
                 {
-                    Id = terminalId,
-                    Url = hashEntries.FirstOrDefault(h => h.Name == "url").Value,
-                    Port = (int)hashEntries.FirstOrDefault(h => h.Name == "port").Value,
-                    Username = hashEntries.FirstOrDefault(h => h.Name == "username").Value,
-                    Password = hashEntries.FirstOrDefault(h => h.Name == "password").Value
-                };
+                    _logger.LogError("Failed to get terminal info for session creation: {TerminalId}", terminalId);
+                    throw new InvalidOperationException($"Terminal info not found for terminal: {terminalId}");
+                }
 
                 // Login to terminal and get session ID (implementation depends on terminal system)
                 string newSessionId = await LoginToTerminalAsync(terminalInfo);
@@ -379,12 +375,11 @@ namespace TerminalManagementService.Services
                 var timeoutThreshold = currentTime - _config.OrphanedTerminalTimeoutSeconds;
                 
                 foreach (var key in keys)
-                {
-                    string terminalId = key.ToString().Replace("terminal:status:", "");
+                {                    string terminalId = key.ToString().Replace("terminal:status:", "");
                     var hashEntries = await _db.HashGetAllAsync(key);
                     
-                    string status = hashEntries.FirstOrDefault(h => h.Name == "status").Value;
-                    long lastUsed = (long)hashEntries.FirstOrDefault(h => h.Name == "last_used_time").Value;
+                    string status = GetHashValue<string>(hashEntries, "status", TerminalStatusConstants.Available);
+                    long lastUsed = GetHashValue<long>(hashEntries, "last_used_time", 0);
                     
                     if (status == TerminalStatusConstants.InUse && lastUsed < timeoutThreshold)
                     {
@@ -426,10 +421,9 @@ namespace TerminalManagementService.Services
                 var keys = server.Keys(pattern: "terminal:status:*").ToArray();
                 
                 foreach (var key in keys)
-                {
-                    var hashEntries = await _db.HashGetAllAsync(key);
-                    string status = hashEntries.FirstOrDefault(h => h.Name == "status").Value;
-                    string podId = hashEntries.FirstOrDefault(h => h.Name == "pod_id").Value;
+                {                    var hashEntries = await _db.HashGetAllAsync(key);
+                    string status = GetHashValue<string>(hashEntries, "status", TerminalStatusConstants.Available);
+                    string podId = GetHashValue<string>(hashEntries, "pod_id", string.Empty);
                     
                     // Check if this terminal is allocated to this pod
                     if (status == TerminalStatusConstants.InUse && podId == _podId)
@@ -472,6 +466,151 @@ namespace TerminalManagementService.Services
             _logger.LogInformation("Login successful for terminal: {TerminalId}", terminal.Id);
             
             return sessionId;
+        }        /// <summary>
+        /// Get terminal info from cache or Redis
+        /// </summary>
+        private async Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
+        {            // Try to get from cache first
+            if (_terminalInfoCache.TryGetValue(terminalId, out var cachedInfo))
+            {
+                Interlocked.Increment(ref _cacheHits);
+                _logger.LogDebug("Terminal info retrieved from cache: {TerminalId}", terminalId);
+                return cachedInfo;
+            }
+
+            // Not in cache, get from Redis
+            Interlocked.Increment(ref _cacheMisses);
+            _logger.LogDebug("Terminal info not in cache, retrieving from Redis: {TerminalId}", terminalId);
+            string infoKey = string.Format(TerminalInfoKeyPattern, terminalId);
+            var hashEntries = await _db.HashGetAllAsync(infoKey);
+            
+            if (hashEntries.Length == 0)
+            {
+                _logger.LogWarning("Terminal info not found in Redis: {TerminalId}", terminalId);
+                return null;
+            }
+
+            var terminalInfo = new TerminalInfo
+            {
+                Id = terminalId,
+                Url = GetHashValue<string>(hashEntries, "url", string.Empty),
+                Port = GetHashValue<int>(hashEntries, "port", _config.Port),
+                Username = GetHashValue<string>(hashEntries, "username", string.Empty),
+                Password = GetHashValue<string>(hashEntries, "password", string.Empty)
+            };
+
+            // Add to cache
+            _terminalInfoCache.TryAdd(terminalId, terminalInfo);
+            _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
+
+            return terminalInfo;
+        }        /// <summary>
+        /// Preload all terminal information into cache
+        /// </summary>
+        public async Task PreloadTerminalCacheAsync()
+        {
+            _logger.LogInformation("Preloading terminal information into cache");
+
+            try
+            {
+                // Get all terminal info keys
+                var server = _redis.GetServer(_redis.GetEndPoints().First());
+                var keys = server.Keys(pattern: "terminal:info:*").ToArray();
+                int loadedCount = 0;
+                
+                foreach (var key in keys)
+                {
+                    string terminalId = key.ToString().Replace("terminal:info:", "");
+                    
+                    // Skip if already in cache
+                    if (_terminalInfoCache.ContainsKey(terminalId))
+                    {
+                        continue;
+                    }
+                    
+                    var hashEntries = await _db.HashGetAllAsync(key);
+                    
+                    if (hashEntries.Length > 0)
+                    {
+                        var terminalInfo = new TerminalInfo
+                        {
+                            Id = terminalId,
+                            Url = GetHashValue<string>(hashEntries, "url", string.Empty),
+                            Port = GetHashValue<int>(hashEntries, "port", _config.Port),
+                            Username = GetHashValue<string>(hashEntries, "username", string.Empty),
+                            Password = GetHashValue<string>(hashEntries, "password", string.Empty)
+                        };
+                        
+                        _terminalInfoCache.TryAdd(terminalId, terminalInfo);
+                        loadedCount++;
+                    }
+                }
+                
+                _logger.LogInformation("Terminal cache preloaded with {Count} terminals", loadedCount);
+            }
+            catch (RedisConnectionException ex)
+            {
+                _logger.LogWarning(ex, "Redis connection failed during cache preload. System will continue using direct Redis access.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error preloading terminal cache. System will continue with empty cache.");
+            }
+        }        /// <summary>
+        /// Get value from HashEntry array safely
+        /// </summary>
+        private T GetHashValue<T>(HashEntry[] entries, string name, T defaultValue = default)
+        {
+            var entry = entries.FirstOrDefault(h => h.Name == name);
+            if (entry.Equals(default(HashEntry)) || entry.Value.IsNull)
+            {
+                return defaultValue;
+            }
+
+            try
+            {
+                if (typeof(T) == typeof(string))
+                {
+                    return (T)(object)(entry.Value.ToString() ?? string.Empty);
+                }
+                else if (typeof(T) == typeof(int))
+                {
+                    return (T)(object)(int)entry.Value;
+                }
+                else if (typeof(T) == typeof(long))
+                {
+                    return (T)(object)(long)entry.Value;
+                }
+                else if (typeof(T) == typeof(bool))
+                {
+                    return (T)(object)(bool)entry.Value;
+                }
+                else
+                {
+                    return defaultValue;
+                }
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+
+        // Cache metrics
+        private long _cacheHits = 0;
+        private long _cacheMisses = 0;
+        
+        /// <summary>
+        /// Get cache performance metrics
+        /// </summary>
+        public (long hits, long misses, double hitRate) GetCacheMetrics()
+        {
+            long hits = _cacheHits;
+            long misses = _cacheMisses;
+            long total = hits + misses;
+            double hitRate = total > 0 ? (double)hits / total * 100 : 0;
+            
+            return (hits, misses, hitRate);
         }
     }
 }
