@@ -27,8 +27,7 @@ builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
 });
 
 // Register services
-// Use the refactored service instead of the original
-builder.Services.AddSingleton<ITerminalService, RedisTerminalServiceRefactored>();
+builder.Services.AddSingleton<ITerminalService, RedisTerminalService>();
 builder.Services.AddHostedService<TerminalCleanupService>();
 
 // Add health checks

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System.Diagnostics;
@@ -82,19 +83,18 @@ public class CachePerformanceTest
     public static async Task RunTests()
     {
         Console.WriteLine("Terminal Info Cache Performance Test");
-        Console.WriteLine("====================================");
-
-        // Create simple configuration
+        Console.WriteLine("====================================");        // Create simple configuration
         var config = new TerminalConfiguration
         {
             InitialTerminalCount = 40,
-            Url = "example.com",
-            Port = 22,
+            Scheme = "http",
             UsernamePattern = "user{0}",
             PasswordPattern = "pass{0}",
             TerminalIdPrefix = "terminal-",
             SessionTimeoutSeconds = 300,
-            OrphanedTerminalTimeoutSeconds = 30
+            OrphanedTerminalTimeoutSeconds = 30,
+            PodName = "local-pod",
+            Secret = "<terminals_password>"
         };
 
         // Create logger
@@ -106,14 +106,17 @@ public class CachePerformanceTest
         var options = Options.Create(config);
 
         try
-        {
-            // Create Redis connection with failsafe configuration
+        {            // Create Redis connection with failsafe configuration
             var redisOptions = ConfigurationOptions.Parse("localhost:6379");
             redisOptions.AbortOnConnectFail = false;
             using var redis = ConnectionMultiplexer.Connect(redisOptions);
 
+            // Create configuration
+            var configurationBuilder = new ConfigurationBuilder();
+            var configuration = configurationBuilder.Build();
+
             // Create terminal service
-            var terminalService = new RedisTerminalService(redis, options, logger);
+            var terminalService = new RedisTerminalService(redis, options, configuration, logger);
 
             // Initialize terminals
             Console.WriteLine("\nInitializing terminals...");

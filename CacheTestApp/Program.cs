@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System.Diagnostics;
@@ -16,19 +17,18 @@ public class Program
 
         // Create mock dependencies
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-        var logger = loggerFactory.CreateLogger<RedisTerminalService>();
-
-        // Create terminal configuration
+        var logger = loggerFactory.CreateLogger<RedisTerminalService>();        // Create terminal configuration
         var config = new TerminalConfiguration
         {
             InitialTerminalCount = 40,
-            Url = "example.com",
-            Port = 22,
+            Scheme = "http",
             UsernamePattern = "user{0}",
             PasswordPattern = "pass{0}",
             TerminalIdPrefix = "terminal-",
             SessionTimeoutSeconds = 300,
-            OrphanedTerminalTimeoutSeconds = 30
+            OrphanedTerminalTimeoutSeconds = 30,
+            PodName = "local-pod",
+            Secret = "<terminals_password>"
         };
 
         var options = Options.Create(config);
@@ -39,10 +39,12 @@ public class Program
             Console.WriteLine("Connecting to Redis...");
             var connectionOptions = ConfigurationOptions.Parse("localhost:6379");
             connectionOptions.AbortOnConnectFail = false;
-            var redis = ConnectionMultiplexer.Connect(connectionOptions);
+            var redis = ConnectionMultiplexer.Connect(connectionOptions);            // Create mock configuration
+            var configurationBuilder = new ConfigurationBuilder();
+            var configuration = configurationBuilder.Build();
 
             // Create terminal service
-            var terminalService = new RedisTerminalService(redis, options, logger);
+            var terminalService = new RedisTerminalService(redis, options, configuration, logger);
 
             // Initialize terminals
             Console.WriteLine("Initializing terminals...");

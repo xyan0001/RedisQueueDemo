@@ -27,13 +27,11 @@ public class TerminalsController(
             }
 
             // Get session ID
-            var sessionId = await _terminalService.GetOrCreateSessionAsync(terminal.Id);
-
-            // Return terminal details with session
+            var sessionId = await _terminalService.GetOrCreateSessionAsync(terminal.Id);            // Return terminal details with session
             return Ok(new
             {
                 terminal.Id,
-                terminal.Url,
+                terminal.Address,
                 terminal.Port,
                 terminal.Username,
                 terminal.Password,
