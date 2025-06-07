@@ -5,11 +5,11 @@ using TerminalManagementService.Models;
 
 namespace TerminalManagementService.Services;
 
-public class RedisTerminalServiceRefactored : ITerminalService
+public class RedisTerminalService : ITerminalService
 {
     private readonly ConnectionMultiplexer _redis;
     private readonly IDatabase _db;
-    private readonly ILogger<RedisTerminalServiceRefactored> _logger;
+    private readonly ILogger<RedisTerminalService> _logger;
     private readonly TerminalConfiguration _config;
     private readonly IConfiguration _appConfig;
     private readonly string _podId;
@@ -24,11 +24,11 @@ public class RedisTerminalServiceRefactored : ITerminalService
     private long _cacheHits = 0;
     private long _cacheMisses = 0;
 
-    public RedisTerminalServiceRefactored(
+    public RedisTerminalService(
         ConnectionMultiplexer redis,
         IOptions<TerminalConfiguration> config,
         IConfiguration appConfig,
-        ILogger<RedisTerminalServiceRefactored> logger)
+        ILogger<RedisTerminalService> logger)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _db = _redis.GetDatabase();
