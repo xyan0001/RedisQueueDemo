@@ -1,4 +1,5 @@
 using StackExchange.Redis;
+using TerminalManagementService;
 using TerminalManagementService.Models;
 using TerminalManagementService.Services;
 
@@ -27,6 +28,7 @@ builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
 
 // Register services
 builder.Services.AddSingleton<ITerminalService, RedisTerminalService>();
+builder.Services.AddTransient<TerminalLifecycleSimulator>();
 //builder.Services.AddHostedService<TerminalCleanupService>();
 
 // Add health checks

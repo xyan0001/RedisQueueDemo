@@ -251,15 +251,13 @@ public class RedisTerminalService : ITerminalService
                 LastUsedTime = currentTime
             };
 
-            await UpdateTerminalStatusAsync(status);
-
-            // Get terminal info from cache or configuration
+            await UpdateTerminalStatusAsync(status);            // Get terminal info from cache or configuration
             var terminalInfo = GetTerminalInfo(id);
             if (terminalInfo == null)
             {
                 _logger.LogError("Failed to get terminal info for allocated terminal: {TerminalId}", id);
-                // Return the terminal to the pool
-                await _db.SetAddAsync(TerminalPoolKey, id);
+                // Note: We do NOT return the terminal to the pool here since it has a configuration issue
+                // This terminal will remain in 'in_use' state and will be reclaimed by the orphaned terminal process
                 return null!; // Using null-forgiving operator as we properly check for null in calling code
             }
 

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using TerminalManagementService;
 using TerminalManagementService.Services;
 
 namespace TerminalManagementService.Controllers;
@@ -7,13 +8,17 @@ namespace TerminalManagementService.Controllers;
 [Route("api/[controller]")]
 public class AdminController(
     ITerminalService terminalService,
-    ILogger<AdminController> logger)
+    ILogger<AdminController> logger,
+    TerminalLifecycleSimulator simulator)
     : ControllerBase
 {
     private readonly ITerminalService _terminalService =
         terminalService ?? throw new ArgumentNullException(nameof(terminalService));
 
     private readonly ILogger<AdminController> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    
+    private readonly TerminalLifecycleSimulator _simulator = 
+        simulator ?? throw new ArgumentNullException(nameof(simulator));
 
     /// <summary>
     /// Add new terminals to the pool
@@ -111,6 +116,50 @@ public class AdminController(
         {
             _logger.LogError(ex, "Error running cache performance test");
             return StatusCode(500, "Error running cache performance test");
+        }
+    }
+
+    /// <summary>
+    /// Run terminal lifecycle simulation
+    /// </summary>
+    /// <param name="iterations">Number of operations to perform</param>
+    /// <param name="parallelism">Number of parallel operations</param>
+    /// <param name="simulatedUsageTimeMs">Time to simulate terminal usage (in ms)</param>
+    /// <returns>Simulation results</returns>
+    [HttpGet("terminals/lifecycle-simulation")]
+    public async Task<IActionResult> RunLifecycleSimulation(
+        [FromQuery] int iterations = 100,
+        [FromQuery] int parallelism = 10,
+        [FromQuery] int simulatedUsageTimeMs = 200)
+    {
+        try
+        {            _logger.LogInformation(
+                "Starting terminal lifecycle simulation with {Iterations} iterations, {Parallelism} parallel operations, {UsageTime}ms usage time",
+                iterations, parallelism, simulatedUsageTimeMs);
+                
+            // Run the simulation using the injected simulator
+            var result = await _simulator.RunSimulationAsync(iterations, parallelism, simulatedUsageTimeMs);
+
+            // Get updated cache metrics
+            var metrics = _terminalService.GetCacheMetrics();
+
+            return Ok(new
+            {
+                Message = "Terminal lifecycle simulation completed successfully",
+                SimulationResults = result,
+                CacheMetrics = new
+                {
+                    Hits = metrics.hits,
+                    Misses = metrics.misses,
+                    HitRate = Math.Round(metrics.hitRate, 2),
+                    TotalRequests = metrics.hits + metrics.misses
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error running terminal lifecycle simulation");
+            return StatusCode(500, "Error running terminal lifecycle simulation: " + ex.Message);
         }
     }
 }

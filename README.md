@@ -457,7 +457,59 @@ Potential enhancements to the caching system:
 
 ## Redis commands
 
-1. Get a session ID for a terminal:
-   ```redis
-   GET terminal:session:terminal-001
-   ```
+1. To clear the database and reset terminal data:
+
+    ```redis
+    FLUSHDB
+    ```
+
+   This command will remove all keys in the current database, effectively resetting the terminal management system.
+
+2. To clear the terminal pool if needed:
+
+    ```redis
+    DEL terminal_pool
+    ```
+
+3. To see all terminals in the pool:
+
+    ```redis
+    SMEMBERS terminal_pool
+    ```
+
+4. To check a terminal status:
+
+    ```redis
+    HGETALL terminal:status:terminal-4850
+    ```
+
+5. To see all terminal sessions:
+
+    ```redis
+    KEYS terminal:session:*
+    ```
+
+6. To check a specific terminal's session:
+
+    ```redis
+    GET terminal:session:terminal-4850
+    ```
+
+7. To manually add a terminal back to the pool:
+
+    ```redis
+    SADD terminal_pool terminal-4850
+    ```
+
+8. To get a terminal status:
+
+    ```redis
+    HGET terminal:status:terminal-4850 status
+    ```
+
+9. To get all the information about a terminal's status:
+
+    ```redis
+    HGETALL terminal:status:terminal-4850
+    ```
+
