@@ -5,3 +5,4 @@ resources:
 - deployment.yaml
 - configmaps.yaml
 - redis-pool-init-job.yaml
+- secrets.yaml

@@ -11,9 +11,9 @@ public class TerminalInfo
     public required string Id { get; set; }
 
     /// <summary>
-    /// URL to connect to the terminal
+    /// Address to connect to the terminal
     /// </summary>
-    public required string Url { get; set; }
+    public required string Address { get; set; }
 
     /// <summary>
     /// Port to connect to the terminal
@@ -29,4 +29,9 @@ public class TerminalInfo
     /// Password for authentication
     /// </summary>
     public required string Password { get; set; }
+
+    /// <summary>
+    /// Branch identifier for the terminal
+    /// </summary>
+    public required int Branch { get; set; }
 }

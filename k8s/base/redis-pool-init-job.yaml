@@ -24,7 +24,14 @@ spec:
             configMapKeyRef:
               name: redis-config
               key: redis-connection
+        - name: TERMINAL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: terminal-secrets
+              key: terminal-password
         envFrom:
         - configMapRef:
             name: terminal-config
+        - configMapRef:
+            name: terminals-data
       restartPolicy: OnFailure

@@ -5,8 +5,9 @@ metadata:
   labels:
     app: terminal-management
 data:
-  TerminalConfiguration__Url: "example.com"
-  TerminalConfiguration__Port: "22"
+  TerminalConfiguration__PodName: "pod-${POD_NAME}"
+  TerminalConfiguration__Secret: "${TERMINAL_PASSWORD}"
+  TerminalConfiguration__Scheme: "https"
   TerminalConfiguration__UsernamePattern: "user{0}"
   TerminalConfiguration__PasswordPattern: "pass{0}"
   TerminalConfiguration__TerminalIdPrefix: "terminal-"
@@ -15,6 +16,54 @@ data:
   TerminalConfiguration__OrphanedTerminalTimeoutSeconds: "30"
   TerminalConfiguration__Environment: "Kubernetes"
   TerminalConfiguration__InitializeRedisOnStartup: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: terminals-data
+  labels:
+    app: terminal-management
+data:
+  TerminalsData__0: "192.168.1.10|443|GATEWAY1|*****|4850|1"
+  TerminalsData__1: "192.168.1.10|443|GATEWAY2|*****|4851|1"
+  TerminalsData__2: "192.168.1.10|443|GATEWAY3|*****|4852|1"
+  TerminalsData__3: "192.168.1.10|443|GATEWAY4|*****|4853|1"
+  TerminalsData__4: "192.168.1.10|443|GATEWAY5|*****|4854|1"
+  TerminalsData__5: "192.168.1.10|443|GATEWAY6|*****|4855|1"
+  TerminalsData__6: "192.168.1.10|443|GATEWAY7|*****|4856|1"
+  TerminalsData__7: "192.168.1.10|443|GATEWAY8|*****|4857|1"
+  TerminalsData__8: "192.168.1.10|443|GATEWAY9|*****|4858|1"
+  TerminalsData__9: "192.168.1.10|443|GATEWAY10|*****|4859|1"
+  TerminalsData__10: "192.168.1.10|443|GATEWAY11|*****|4860|1"
+  TerminalsData__11: "192.168.1.10|443|GATEWAY12|*****|4861|1"
+  TerminalsData__12: "192.168.1.10|443|GATEWAY13|*****|4862|1"
+  TerminalsData__13: "192.168.1.10|443|GATEWAY14|*****|4863|1"
+  TerminalsData__14: "192.168.1.10|443|GATEWAY15|*****|4864|1"
+  TerminalsData__15: "192.168.1.10|443|GATEWAY16|*****|4865|1"
+  TerminalsData__16: "192.168.1.10|443|GATEWAY17|*****|4866|1"
+  TerminalsData__17: "192.168.1.10|443|GATEWAY18|*****|4867|1"
+  TerminalsData__18: "192.168.1.10|443|GATEWAY19|*****|4868|1"
+  TerminalsData__19: "192.168.1.10|443|GATEWAY20|*****|4869|1"
+  TerminalsData__20: "192.168.1.10|443|GATEWAY21|*****|4870|1"
+  TerminalsData__21: "192.168.1.10|443|GATEWAY22|*****|4871|1"
+  TerminalsData__22: "192.168.1.10|443|GATEWAY23|*****|4872|1"
+  TerminalsData__23: "192.168.1.10|443|GATEWAY24|*****|4873|1"
+  TerminalsData__24: "192.168.1.10|443|GATEWAY25|*****|4874|1"
+  TerminalsData__25: "192.168.1.10|443|GATEWAY26|*****|4875|1"
+  TerminalsData__26: "192.168.1.10|443|GATEWAY27|*****|4876|1"
+  TerminalsData__27: "192.168.1.10|443|GATEWAY28|*****|4877|1"
+  TerminalsData__28: "192.168.1.10|443|GATEWAY29|*****|4878|1"
+  TerminalsData__29: "192.168.1.10|443|GATEWAY30|*****|4879|1"
+  TerminalsData__30: "192.168.1.10|443|GATEWAY31|*****|4880|1"
+  TerminalsData__31: "192.168.1.10|443|GATEWAY32|*****|4881|1"
+  TerminalsData__32: "192.168.1.10|443|GATEWAY33|*****|4882|1"
+  TerminalsData__33: "192.168.1.10|443|GATEWAY34|*****|4883|1"
+  TerminalsData__34: "192.168.1.10|443|GATEWAY35|*****|4884|1"
+  TerminalsData__35: "192.168.1.10|443|GATEWAY36|*****|4885|1"
+  TerminalsData__36: "192.168.1.10|443|GATEWAY37|*****|4886|1"
+  TerminalsData__37: "192.168.1.10|443|GATEWAY38|*****|4887|1"
+  TerminalsData__38: "192.168.1.10|443|GATEWAY39|*****|4888|1"
+  TerminalsData__39: "192.168.1.10|443|GATEWAY40|*****|4889|1"
 ---
 apiVersion: v1
 kind: ConfigMap

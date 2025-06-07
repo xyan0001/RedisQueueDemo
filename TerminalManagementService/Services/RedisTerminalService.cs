@@ -5,12 +5,13 @@ using TerminalManagementService.Models;
 
 namespace TerminalManagementService.Services;
 
-public class RedisTerminalService : ITerminalService
+public class RedisTerminalServiceRefactored : ITerminalService
 {
     private readonly ConnectionMultiplexer _redis;
     private readonly IDatabase _db;
-    private readonly ILogger<RedisTerminalService> _logger;
+    private readonly ILogger<RedisTerminalServiceRefactored> _logger;
     private readonly TerminalConfiguration _config;
+    private readonly IConfiguration _appConfig;
     private readonly string _podId;
     private readonly ConcurrentDictionary<string, TerminalInfo> _terminalInfoCache;
 
@@ -23,21 +24,23 @@ public class RedisTerminalService : ITerminalService
     private long _cacheHits = 0;
     private long _cacheMisses = 0;
 
-    public RedisTerminalService(
+    public RedisTerminalServiceRefactored(
         ConnectionMultiplexer redis,
         IOptions<TerminalConfiguration> config,
-        ILogger<RedisTerminalService> logger)
+        IConfiguration appConfig,
+        ILogger<RedisTerminalServiceRefactored> logger)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _db = _redis.GetDatabase();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
         _terminalInfoCache = new ConcurrentDictionary<string, TerminalInfo>();
 
-        // Get pod ID from environment variable (set by Kubernetes)
-        _podId = Environment.GetEnvironmentVariable("POD_NAME") ?? Guid.NewGuid().ToString();
+        // Get pod ID from environment variable (set by Kubernetes) or from config
+        _podId = Environment.GetEnvironmentVariable("POD_NAME") ?? _config.PodName;
 
-        _logger.LogInformation("RedisTerminalService initialized with terminal info caching enabled");
+        _logger.LogInformation("RedisTerminalServiceRefactored initialized with terminal info caching enabled");
     }
 
     /// <summary>
@@ -57,18 +60,39 @@ public class RedisTerminalService : ITerminalService
 
         try
         {
-            for (int i = 1; i <= _config.InitialTerminalCount; i++)
+            // Get terminals data from configuration
+            var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
+            if (terminalsData == null || terminalsData.Length == 0)
             {
-                string terminalId = $"{_config.TerminalIdPrefix}{i:000}";
+                _logger.LogWarning("No terminals data found in configuration. Skipping initialization.");
+                return;
+            }
+
+            _logger.LogInformation("Found {Count} terminals in configuration", terminalsData.Length);
+
+            int index = 0;
+            foreach (var terminalDataString in terminalsData)
+            {
+                index++;
+                string terminalId = $"{_config.TerminalIdPrefix}{index:000}";
                 string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
+
+                // Parse terminal data string
+                // Format: Address|Port|Username|Password|DataPort|Branch
+                var parts = terminalDataString.Split('|');
+                if (parts.Length < 6)
+                {
+                    _logger.LogWarning("Invalid terminal data format for entry {Index}: {Data}", index, terminalDataString);
+                    continue;
+                }
 
                 // Check if this terminal already exists
                 bool exists = await _db.KeyExistsAsync(statusKey);
                 if (!exists)
                 {
                     // Create terminal info for cache - no need to store in Redis
-                    var terminal = CreateTerminalInfoFromConfig(i);
-                    
+                    var terminal = CreateTerminalInfoFromString(terminalId, terminalDataString);
+
                     // Add to cache
                     _terminalInfoCache.TryAdd(terminalId, terminal);
                     _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
@@ -78,7 +102,7 @@ public class RedisTerminalService : ITerminalService
                     {
                         TerminalId = terminalId,
                         Status = TerminalStatusConstants.Available,
-                        PodId = string.Empty,
+                        PodName = string.Empty,
                         LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     };
 
@@ -91,11 +115,11 @@ public class RedisTerminalService : ITerminalService
                 else
                 {
                     _logger.LogInformation("Terminal already exists: {TerminalId}", terminalId);
-                    
+
                     // Make sure it's in the cache
                     if (!_terminalInfoCache.ContainsKey(terminalId))
                     {
-                        var terminal = CreateTerminalInfoFromConfig(i);
+                        var terminal = CreateTerminalInfoFromString(terminalId, terminalDataString);
                         _terminalInfoCache.TryAdd(terminalId, terminal);
                         _logger.LogDebug("Added existing terminal to cache: {TerminalId}", terminalId);
                     }
@@ -120,7 +144,18 @@ public class RedisTerminalService : ITerminalService
 
         try
         {
-            for (int i = startIndex; i < startIndex + count; i++)
+            // Get terminals data from configuration
+            var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
+            if (terminalsData == null || terminalsData.Length == 0)
+            {
+                _logger.LogWarning("No terminals data found in configuration. Skipping adding terminals.");
+                return;
+            }
+
+            // Ensure we don't exceed the available data
+            int maxIndex = Math.Min(startIndex + count - 1, terminalsData.Length);
+
+            for (int i = startIndex; i <= maxIndex; i++)
             {
                 string terminalId = $"{_config.TerminalIdPrefix}{i:000}";
                 string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
@@ -129,9 +164,12 @@ public class RedisTerminalService : ITerminalService
                 bool exists = await _db.KeyExistsAsync(statusKey);
                 if (!exists)
                 {
+                    // Get the terminal data entry
+                    string terminalDataString = terminalsData[i - 1]; // Adjust for 0-based array
+
                     // Create terminal info for cache only - no need to store in Redis
-                    var terminal = CreateTerminalInfoFromConfig(i);
-                    
+                    var terminal = CreateTerminalInfoFromString(terminalId, terminalDataString);
+
                     // Add to cache
                     _terminalInfoCache.TryAdd(terminalId, terminal);
                     _logger.LogDebug("New terminal info added to cache: {TerminalId}", terminalId);
@@ -141,7 +179,7 @@ public class RedisTerminalService : ITerminalService
                     {
                         TerminalId = terminalId,
                         Status = TerminalStatusConstants.Available,
-                        PodId = string.Empty,
+                        PodName = string.Empty,
                         LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     };
 
@@ -191,7 +229,7 @@ public class RedisTerminalService : ITerminalService
             {
                 TerminalId = id,
                 Status = TerminalStatusConstants.InUse,
-                PodId = _podId,
+                PodName = _podId,
                 LastUsedTime = currentTime
             };
 
@@ -231,7 +269,7 @@ public class RedisTerminalService : ITerminalService
             {
                 TerminalId = terminalId,
                 Status = TerminalStatusConstants.Available,
-                PodId = string.Empty,
+                PodName = string.Empty,
                 LastUsedTime = currentTime
             };
 
@@ -370,7 +408,7 @@ public class RedisTerminalService : ITerminalService
 
                     // Update status
                     terminalStatus.Status = TerminalStatusConstants.Available;
-                    terminalStatus.PodId = string.Empty;
+                    terminalStatus.PodName = string.Empty;
                     terminalStatus.LastUsedTime = currentTime;
 
                     await UpdateTerminalStatusAsync(terminalStatus);
@@ -407,7 +445,7 @@ public class RedisTerminalService : ITerminalService
 
                 // Check if this terminal is allocated to this pod
                 if (terminalStatus.Status == TerminalStatusConstants.InUse &&
-                    terminalStatus.PodId == _podId)
+                    terminalStatus.PodName == _podId)
                 {
                     _logger.LogInformation("Releasing terminal on shutdown: {TerminalId}", terminalId);
 
@@ -454,9 +492,32 @@ public class RedisTerminalService : ITerminalService
     }
 
     /// <summary>
+    /// Create a terminal info object from a data string
+    /// Format: Address|Port|Username|Password|DataPort|Branch
+    /// </summary>
+    private TerminalInfo CreateTerminalInfoFromString(string terminalId, string dataString)
+    {
+        var parts = dataString.Split('|');
+        if (parts.Length < 6)
+        {
+            throw new ArgumentException($"Invalid terminal data format: {dataString}", nameof(dataString));
+        }
+
+        return new TerminalInfo
+        {
+            Id = terminalId,
+            Address = parts[0],
+            Port = int.Parse(parts[1]),
+            Username = parts[2],
+            Password = _config.Secret, // Use the Secret from config instead of the one in the data string
+            Branch = int.Parse(parts[5])
+        };
+    }
+
+    /// <summary>
     /// Get terminal info from cache or create from configuration
     /// </summary>
-    private Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
+    private async Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
     {
         if (string.IsNullOrEmpty(terminalId))
         {
@@ -468,28 +529,34 @@ public class RedisTerminalService : ITerminalService
         {
             Interlocked.Increment(ref _cacheHits);
             _logger.LogDebug("Terminal info retrieved from cache: {TerminalId}", terminalId);
-            return Task.FromResult(cachedInfo);
+            return cachedInfo;
         }
 
-        // Not in cache, create from configuration
+        // Not in cache, find in terminals data
         Interlocked.Increment(ref _cacheMisses);
-        _logger.LogDebug("Terminal info not in cache, creating from configuration: {TerminalId}", terminalId);
-        
+        _logger.LogDebug("Terminal info not in cache, looking in terminals data: {TerminalId}", terminalId);
+
         // Extract terminal number from terminalId
-        if (terminalId.StartsWith(_config.TerminalIdPrefix) && 
+        if (terminalId.StartsWith(_config.TerminalIdPrefix) &&
             int.TryParse(terminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalNumber))
         {
-            var terminalInfo = CreateTerminalInfoFromConfig(terminalNumber);
-            
-            // Add to cache
-            _terminalInfoCache.TryAdd(terminalId, terminalInfo);
-            _logger.LogDebug("Terminal info created and added to cache: {TerminalId}", terminalId);
-            
-            return Task.FromResult(terminalInfo);
+            // Get terminals data from configuration
+            var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
+            if (terminalsData != null && terminalNumber <= terminalsData.Length)
+            {
+                var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
+                var terminalInfo = CreateTerminalInfoFromString(terminalId, terminalDataString);
+
+                // Add to cache
+                _terminalInfoCache.TryAdd(terminalId, terminalInfo);
+                _logger.LogDebug("Terminal info created and added to cache: {TerminalId}", terminalId);
+
+                return terminalInfo;
+            }
         }
-        
+
         _logger.LogWarning("Could not create terminal info for invalid terminal ID: {TerminalId}", terminalId);
-        return Task.FromResult<TerminalInfo>(null!);
+        return null!;
     }
 
     /// <summary>
@@ -498,15 +565,23 @@ public class RedisTerminalService : ITerminalService
     public async Task PreloadTerminalCacheAsync()
     {
         _logger.LogInformation("Preloading terminal info cache...");
-        
+
         try
         {
             // Get all terminals from the pool
             var terminalIds = await _db.SetMembersAsync(TerminalPoolKey);
             var inUseTerminalsTasks = new List<Task<TerminalStatus>>();
-            
+
+            // Get terminals data from configuration
+            var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
+            if (terminalsData == null || terminalsData.Length == 0)
+            {
+                _logger.LogWarning("No terminals data found in configuration. Skipping preloading cache.");
+                return;
+            }
+
             // Get terminals that are in use (not in the pool)
-            for (int i = 1; i <= _config.InitialTerminalCount; i++)
+            for (int i = 1; i <= terminalsData.Length; i++)
             {
                 string terminalId = $"{_config.TerminalIdPrefix}{i:000}";
                 if (!terminalIds.Contains(terminalId))
@@ -514,59 +589,40 @@ public class RedisTerminalService : ITerminalService
                     inUseTerminalsTasks.Add(GetTerminalStatusAsync(terminalId));
                 }
             }
-            
+
             // Wait for all status checks to complete
             var inUseTerminals = await Task.WhenAll(inUseTerminalsTasks);
-            
-            // Preload terminal info for all terminals
+
+            // Preload terminal info for all terminals in the pool
             foreach (var terminalId in terminalIds)
             {
-                int terminalNumber = ExtractTerminalNumber(terminalId.ToString());
-                if (terminalNumber > 0)
+                if (int.TryParse(terminalId.ToString().Substring(_config.TerminalIdPrefix.Length), out int terminalNumber) &&
+                    terminalNumber > 0 && terminalNumber <= terminalsData.Length)
                 {
-                    var terminalInfo = CreateTerminalInfoFromConfig(terminalNumber);
+                    var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
+                    var terminalInfo = CreateTerminalInfoFromString(terminalId.ToString(), terminalDataString);
                     _terminalInfoCache.TryAdd(terminalId.ToString(), terminalInfo);
                 }
             }
-            
+
             // Also preload for in-use terminals
-            foreach (var status in inUseTerminals)
+            foreach (var status in inUseTerminals.Where(s => s != null))
             {
-                if (status != null)
+                if (int.TryParse(status.TerminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalNumber) &&
+                    terminalNumber > 0 && terminalNumber <= terminalsData.Length)
                 {
-                    int terminalNumber = ExtractTerminalNumber(status.TerminalId);
-                    if (terminalNumber > 0)
-                    {
-                        var terminalInfo = CreateTerminalInfoFromConfig(terminalNumber);
-                        _terminalInfoCache.TryAdd(status.TerminalId, terminalInfo);
-                    }
+                    var terminalDataString = terminalsData[terminalNumber - 1]; // Adjust for 0-based array
+                    var terminalInfo = CreateTerminalInfoFromString(status.TerminalId, terminalDataString);
+                    _terminalInfoCache.TryAdd(status.TerminalId, terminalInfo);
                 }
             }
-            
+
             _logger.LogInformation("Terminal info cache preloaded with {Count} terminals", _terminalInfoCache.Count);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error preloading terminal info cache");
         }
-    }
-    
-    /// <summary>
-    /// Extract the terminal number from a terminal ID
-    /// </summary>
-    private int ExtractTerminalNumber(string terminalId)
-    {
-        if (string.IsNullOrEmpty(terminalId) || !terminalId.StartsWith(_config.TerminalIdPrefix))
-        {
-            return -1;
-        }
-        
-        if (int.TryParse(terminalId.Substring(_config.TerminalIdPrefix.Length), out int terminalNumber))
-        {
-            return terminalNumber;
-        }
-        
-        return -1;
     }
 
     /// <summary>
@@ -588,7 +644,7 @@ public class RedisTerminalService : ITerminalService
             {
                 TerminalId = terminalId,
                 Status = TerminalStatusConstants.Available,
-                PodId = string.Empty,
+                PodName = string.Empty,
                 LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
         }
@@ -597,7 +653,7 @@ public class RedisTerminalService : ITerminalService
         {
             TerminalId = terminalId,
             Status = GetHashValue(hashEntries, "status", TerminalStatusConstants.Available),
-            PodId = GetHashValue(hashEntries, "pod_id", string.Empty),
+            PodName = GetHashValue(hashEntries, "pod_name", string.Empty),
             LastUsedTime = GetHashValue(hashEntries, "last_used_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
         };
     }
@@ -616,7 +672,7 @@ public class RedisTerminalService : ITerminalService
         var statusHashEntries = new HashEntry[]
         {
             new HashEntry("status", status.Status),
-            new HashEntry("pod_id", status.PodId),
+            new HashEntry("pod_name", status.PodName),
             new HashEntry("last_used_time", status.LastUsedTime)
         };
 
@@ -637,22 +693,6 @@ public class RedisTerminalService : ITerminalService
         return (hits, misses, hitRate);
     }
 
-    /// <summary>
-    /// Create a terminal info object from configuration
-    /// </summary>
-    private TerminalInfo CreateTerminalInfoFromConfig(int terminalNumber)
-    {
-        string terminalId = $"{_config.TerminalIdPrefix}{terminalNumber:000}";
-        return new TerminalInfo
-        {
-            Id = terminalId,
-            Url = _config.Url,
-            Port = _config.Port,
-            Username = string.Format(_config.UsernamePattern, terminalNumber),
-            Password = string.Format(_config.PasswordPattern, terminalNumber)
-        };
-    }
-    
     /// <summary>
     /// Get value from HashEntry array safely
     /// </summary>

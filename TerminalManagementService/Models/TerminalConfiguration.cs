@@ -6,14 +6,19 @@ namespace TerminalManagementService.Models;
 public class TerminalConfiguration
 {
     /// <summary>
-    /// Common URL for all terminals
+    /// Pod name for this instance
     /// </summary>
-    public required string Url { get; set; }
+    public string PodName { get; set; } = "local-pod";
 
     /// <summary>
-    /// Common port for all terminals
+    /// Secret to use for terminal passwords
     /// </summary>
-    public int Port { get; set; }
+    public string Secret { get; set; } = "<terminals_password>";
+
+    /// <summary>
+    /// Connection scheme (http, https)
+    /// </summary>
+    public string Scheme { get; set; } = "http";
 
     /// <summary>
     /// Base username pattern (e.g., "user{0}" where {0} is the terminal ID)
@@ -23,17 +28,15 @@ public class TerminalConfiguration
     /// <summary>
     /// Base password pattern (e.g., "pass{0}" where {0} is the terminal ID)
     /// </summary>
-    public required string PasswordPattern { get; set; }
-
-    /// <summary>
+    public required string PasswordPattern { get; set; }    /// <summary>
     /// Terminal ID prefix
     /// </summary>
     public required string TerminalIdPrefix { get; set; }
-
+    
     /// <summary>
     /// Initial number of terminals to create
     /// </summary>
-    public int InitialTerminalCount { get; set; }
+    public int InitialTerminalCount { get; set; } = 40;
 
     /// <summary>
     /// Session timeout in seconds (default 300 seconds = 5 minutes)

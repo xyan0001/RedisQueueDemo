@@ -16,9 +16,9 @@ public class TerminalStatus
     public required string Status { get; set; }
 
     /// <summary>
-    /// ID of the pod currently using this terminal (if in use)
+    /// Name of the pod currently using this terminal (if in use)
     /// </summary>
-    public required string PodId { get; set; }
+    public required string PodName { get; set; }
 
     /// <summary>
     /// Unix timestamp of last activity
