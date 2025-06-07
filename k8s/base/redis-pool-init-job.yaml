@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-pool-init
+  labels:
+    app: terminal-management
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      containers:
+      - name: redis-init
+        image: ${REGISTRY}/terminal-management-service:${TAG}
+        command: ["dotnet", "TerminalManagementService.dll", "--initialize-redis"]
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: ConnectionStrings__Redis
+          valueFrom:
+            configMapKeyRef:
+              name: redis-config
+              key: redis-connection
+        envFrom:
+        - configMapRef:
+            name: terminal-config
+      restartPolicy: OnFailure

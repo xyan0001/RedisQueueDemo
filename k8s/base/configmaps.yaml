@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: terminal-config
+  labels:
+    app: terminal-management
+data:
+  TerminalConfiguration__Url: "example.com"
+  TerminalConfiguration__Port: "22"
+  TerminalConfiguration__UsernamePattern: "user{0}"
+  TerminalConfiguration__PasswordPattern: "pass{0}"
+  TerminalConfiguration__TerminalIdPrefix: "terminal-"
+  TerminalConfiguration__InitialTerminalCount: "40"
+  TerminalConfiguration__SessionTimeoutSeconds: "300"
+  TerminalConfiguration__OrphanedTerminalTimeoutSeconds: "30"
+  TerminalConfiguration__Environment: "Kubernetes"
+  TerminalConfiguration__InitializeRedisOnStartup: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  labels:
+    app: terminal-management
+data:
+  redis-connection: "redis-master:6379,abortConnect=false"

@@ -5,6 +5,9 @@ using TerminalManagementService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Check command line arguments for Redis initialization
+bool initializeRedisOnly = args.Contains("--initialize-redis");
+
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -24,6 +27,7 @@ builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
 });
 
 // Register services
+// Use the refactored service instead of the original
 builder.Services.AddSingleton<ITerminalService, RedisTerminalService>();
 builder.Services.AddHostedService<TerminalCleanupService>();
 
@@ -31,6 +35,33 @@ builder.Services.AddHostedService<TerminalCleanupService>();
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
+
+// If running in Redis initialization mode, just initialize Redis and exit
+if (initializeRedisOnly)
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogInformation("Running in Redis initialization mode");
+        
+        try
+        {
+            var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
+            
+            // Force initialization regardless of configuration setting
+            logger.LogInformation("Initializing Redis terminals...");
+            await terminalService.InitializeTerminalsAsync();
+            logger.LogInformation("Redis initialization completed successfully");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error initializing Redis");
+            Environment.ExitCode = 1;
+        }
+        
+        return; // Exit the application after initialization
+    }
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

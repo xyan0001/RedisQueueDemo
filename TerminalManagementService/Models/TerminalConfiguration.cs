@@ -44,4 +44,15 @@ public class TerminalConfiguration
     /// Orphaned terminal timeout in seconds (default 30 seconds)
     /// </summary>
     public int OrphanedTerminalTimeoutSeconds { get; set; } = 30;
+    
+    /// <summary>
+    /// Environment type for the service (Kubernetes, Local, etc.)
+    /// </summary>
+    public string Environment { get; set; } = "Local";
+    
+    /// <summary>
+    /// When true, the service will initialize Redis on startup
+    /// Set to false when using a dedicated initialization job in Kubernetes
+    /// </summary>
+    public bool InitializeRedisOnStartup { get; set; } = true;
 }
