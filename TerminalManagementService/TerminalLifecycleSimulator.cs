@@ -20,6 +20,7 @@ public class TerminalLifecycleSimulator(
     private int _failedOperations = 0;
     private List<double> _operationTimes = new();
     private readonly object _lockObject = new();
+    private readonly Random _random = new Random();
 
     /// <summary>
     /// Run a simulation of multiple terminal lifecycle operations
@@ -30,8 +31,7 @@ public class TerminalLifecycleSimulator(
     /// <returns>Simulation results</returns>
     public async Task<SimulationResult> RunSimulationAsync(
         int iterations = 100,
-        int parallelism = 10,
-        int simulatedUsageTimeMs = 200)
+        int parallelism = 10)
     {
         // Reset counters
         _successfulOperations = 0;
@@ -39,8 +39,8 @@ public class TerminalLifecycleSimulator(
         _operationTimes.Clear();
 
         _logger.LogInformation(
-            "Starting terminal lifecycle simulation: {Iterations} iterations, {Parallelism} parallel operations, {UsageTime}ms usage time",
-            iterations, parallelism, simulatedUsageTimeMs);
+            "Starting terminal lifecycle simulation: {Iterations} iterations, {Parallelism} parallel operations",
+            iterations, parallelism);
 
         _stopwatch.Restart();
 
@@ -56,7 +56,7 @@ public class TerminalLifecycleSimulator(
                 tasks.RemoveAll(t => t.IsCompleted);
             }
 
-            tasks.Add(SimulateTerminalLifecycleAsync(simulatedUsageTimeMs));
+            tasks.Add(SimulateTerminalLifecycleAsync());
         }
 
         // Wait for all remaining tasks to complete
@@ -75,8 +75,7 @@ public class TerminalLifecycleSimulator(
             MinOperationTimeMs = _operationTimes.Count > 0 ? _operationTimes.Min() : 0,
             MaxOperationTimeMs = _operationTimes.Count > 0 ? _operationTimes.Max() : 0,
             OperationsPerSecond = _successfulOperations / (_stopwatch.ElapsedMilliseconds / 1000.0),
-            Parallelism = parallelism,
-            SimulatedUsageTimeMs = simulatedUsageTimeMs
+            Parallelism = parallelism
         };
 
         _logger.LogInformation(
@@ -92,35 +91,56 @@ public class TerminalLifecycleSimulator(
     /// <summary>
     /// Simulate a single terminal lifecycle (allocate, use, release)
     /// </summary>
-    private async Task SimulateTerminalLifecycleAsync(int simulatedUsageTimeMs)
+    public async Task<SimulationResult> SimulateTerminalLifecycleAsync()
     {
         var operationStopwatch = new Stopwatch();
         operationStopwatch.Start();
-
+        var simulatedUsageTimeMs = 100;
+        simulatedUsageTimeMs = Math.Max(100, simulatedUsageTimeMs + _random.Next(-50, 150)); // Add some variability
         try
         {
             // Step 1: Allocate a terminal
+            _logger.LogInformation("Step 1: Allocating terminal");
             var terminal = await _terminalService.AllocateTerminalAsync();
             if (terminal == null)
             {
                 _logger.LogWarning("Failed to allocate terminal - no terminals available");
                 Interlocked.Increment(ref _failedOperations);
-                return;
+                operationStopwatch.Stop();
+                return new SimulationResult()
+                {
+                    TotalOperations = 1,
+                    SuccessfulOperations = 0,
+                    FailedOperations = 1,
+                    TotalDurationMs = operationStopwatch.ElapsedMilliseconds,
+                    AverageOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                    MinOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                    MaxOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                    OperationsPerSecond = 0.0,
+                    Parallelism = 1
+                };
             }
 
             // Step 2: Get or create a session
+            _logger.LogInformation("Step 2: Getting or creating session for terminal {TerminalId}", terminal.Id);
             var sessionId = await _terminalService.GetOrCreateSessionAsync(terminal.Id);
 
-            // Step 3: Simulate using the terminal (making a request)
+            // Step 3: Refresh the session to keep it active
+            _logger.LogInformation("Step 3: Refreshing session for terminal {TerminalId}, session {SessionId}",
+                terminal.Id, sessionId);
+            await _terminalService.RefreshSessionTtlAsync(terminal.Id);
+
+            // Step 4: Simulate using the terminal (making a request)
+            _logger.LogInformation("Step 4: Simulating terminal usage with {TerminalId}, delay: {Delay}ms",
+                terminal.Id, simulatedUsageTimeMs);
             await Task.Delay(simulatedUsageTimeMs);
 
-            // Refresh the session to keep it active
-            await _terminalService.RefreshSessionAsync(terminal.Id);
-
-            // Update last used time to show activity
+            // Step 5: Update the last used time
+            _logger.LogInformation("Step 5: Updating last used time for terminal {TerminalId}", terminal.Id);
             await _terminalService.UpdateLastUsedTimeAsync(terminal.Id);
 
-            // Step 4: Release the terminal back to the pool
+            // Step 6: Release the terminal back to the pool
+            _logger.LogInformation("Step 6: Releasing terminal {TerminalId} back to the pool", terminal.Id);
             await _terminalService.ReleaseTerminalAsync(terminal.Id);
 
             operationStopwatch.Stop();
@@ -131,6 +151,18 @@ public class TerminalLifecycleSimulator(
                 _operationTimes.Add(operationStopwatch.ElapsedMilliseconds);
             }
             Interlocked.Increment(ref _successfulOperations);
+            return new SimulationResult()
+            {
+                TotalOperations = 1,
+                SuccessfulOperations = 1,
+                FailedOperations = 0,
+                TotalDurationMs = operationStopwatch.ElapsedMilliseconds,
+                AverageOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                MinOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                MaxOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+                OperationsPerSecond = 1.0 / (operationStopwatch.ElapsedMilliseconds / 1000.0),
+                Parallelism = 1
+            };
         }
         catch (Exception ex)
         {
@@ -138,24 +170,25 @@ public class TerminalLifecycleSimulator(
             _logger.LogError(ex, "Error during terminal lifecycle simulation");
             Interlocked.Increment(ref _failedOperations);
         }
-    }
-
-    /// <summary>
-    /// Get current simulation statistics
-    /// </summary>
-    public SimulationResult GetCurrentStatistics()
-    {
-        var elapsedMs = _stopwatch.ElapsedMilliseconds;
-        return new SimulationResult
+        finally
         {
-            TotalOperations = _successfulOperations + _failedOperations,
-            SuccessfulOperations = _successfulOperations,
-            FailedOperations = _failedOperations,
-            TotalDurationMs = elapsedMs,
-            AverageOperationTimeMs = _operationTimes.Count > 0 ? _operationTimes.Average() : 0,
-            MinOperationTimeMs = _operationTimes.Count > 0 ? _operationTimes.Min() : 0,
-            MaxOperationTimeMs = _operationTimes.Count > 0 ? _operationTimes.Max() : 0,
-            OperationsPerSecond = elapsedMs > 0 ? _successfulOperations / (elapsedMs / 1000.0) : 0
+            operationStopwatch.Stop();
+            lock (_lockObject)
+            {
+                _operationTimes.Add(operationStopwatch.ElapsedMilliseconds);
+            }
+        }
+        return new SimulationResult()
+        {
+            TotalOperations = 1,
+            SuccessfulOperations = 0,
+            FailedOperations = 1,
+            TotalDurationMs = operationStopwatch.ElapsedMilliseconds,
+            AverageOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+            MinOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+            MaxOperationTimeMs = operationStopwatch.ElapsedMilliseconds,
+            OperationsPerSecond = 0.0,
+            Parallelism = 1
         };
     }
 }
@@ -174,7 +207,6 @@ public class SimulationResult
     public double MaxOperationTimeMs { get; set; }
     public double OperationsPerSecond { get; set; }
     public int Parallelism { get; set; }
-    public int SimulatedUsageTimeMs { get; set; }
 
     public override string ToString()
     {

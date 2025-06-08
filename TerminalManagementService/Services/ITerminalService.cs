@@ -12,18 +12,15 @@ public interface ITerminalService
     /// </summary>
     Task InitializeTerminalsAsync();
 
-    /// <summary>
-    /// Add new terminals to the pool
-    /// </summary>
-    Task AddTerminalsAsync(int startIndex, int count);
+    Task<bool> IsInitialized();
 
     /// <summary>
-    /// Allocate a terminal from the pool
+    /// Allocate a terminal from the queue
     /// </summary>
-    Task<TerminalInfo> AllocateTerminalAsync();
+    Task<TerminalInfo?> AllocateTerminalAsync(int waitTimeoutSeconds = 15);
 
     /// <summary>
-    /// Release a terminal back to the pool
+    /// Release a terminal back to the queue
     /// </summary>
     Task ReleaseTerminalAsync(string terminalId);
 
@@ -33,9 +30,9 @@ public interface ITerminalService
     Task<string> GetOrCreateSessionAsync(string terminalId);
 
     /// <summary>
-    /// Refresh the session timeout for a terminal
+    /// Refresh the session timeout (TTL, time to live) for a terminal
     /// </summary>
-    Task RefreshSessionAsync(string terminalId);
+    Task RefreshSessionTtlAsync(string terminalId);
 
     /// <summary>
     /// Update the last used time for a terminal
@@ -53,17 +50,12 @@ public interface ITerminalService
     Task ShutdownAsync();
 
     /// <summary>
-    /// Get cache performance metrics
+    /// Get the information of all terminals
     /// </summary>
-    (long hits, long misses, double hitRate) GetCacheMetrics();
+    Task<List<TerminalStatus>> GetTerminalStatusListAsync();
 
-    /// <summary>
-    /// Get status information for a terminal
-    /// </summary>
-    Task<TerminalStatus> GetTerminalStatusAsync(string terminalId);
-
-    /// <summary>
-    /// Update status for a terminal
-    /// </summary>
-    Task UpdateTerminalStatusAsync(TerminalStatus status);
+    ///// <summary>
+    ///// Update status for a terminal
+    ///// </summary>
+    //Task UpdateTerminalStatusAsync(TerminalStatus status);
 }

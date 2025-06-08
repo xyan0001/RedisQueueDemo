@@ -2,15 +2,18 @@ using Microsoft.AspNetCore.Mvc;
 using TerminalManagementService.Services;
 
 namespace TerminalManagementService.Controllers;
+
 [ApiController]
 [Route("api/[controller]")]
 public class TerminalsController(
     ITerminalService terminalService,
-    ILogger<TerminalsController> logger)
+    ILogger<TerminalsController> logger,
+    TerminalLifecycleSimulator simulator)
     : ControllerBase
 {
     private readonly ITerminalService _terminalService = terminalService ?? throw new ArgumentNullException(nameof(terminalService));
     private readonly ILogger<TerminalsController> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly TerminalLifecycleSimulator _simulator = simulator ?? throw new ArgumentNullException(nameof(simulator));
 
     /// <summary>
     /// Allocate a terminal from the pool
@@ -23,7 +26,7 @@ public class TerminalsController(
             var terminal = await _terminalService.AllocateTerminalAsync();
             if (terminal == null)
             {
-                return StatusCode(503, "No terminals available");
+                return NotFound("No terminals available");
             }
 
             // Get session ID
@@ -72,7 +75,7 @@ public class TerminalsController(
     {
         try
         {
-            await _terminalService.RefreshSessionAsync(id);
+            await _terminalService.RefreshSessionTtlAsync(id);
             await _terminalService.UpdateLastUsedTimeAsync(id);
             return Ok(new { Message = $"Session for terminal {id} refreshed successfully" });
         }
@@ -84,69 +87,99 @@ public class TerminalsController(
     }
 
     /// <summary>
+    /// Clean up orphaned terminals
+    /// </summary>
+    /// <returns>Result of the cleanup operation</returns>
+    [HttpPost("cleanup")]
+    public async Task<IActionResult> CleanupTerminals()
+    {
+        try
+        {
+            await _terminalService.ReclaimOrphanedTerminalsAsync();
+            return Ok(new { Message = "Terminal cleanup completed" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error cleaning up terminals");
+            return StatusCode(500, "Error cleaning up terminals: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Get the status of all terminals
+    /// </summary>
+    /// <returns>List of terminal statuses</returns>
+    [HttpGet("statuses")]
+    public async Task<IActionResult> GetTerminalStatuses()
+    {
+        try
+        {
+            var statuses = await _terminalService.GetTerminalStatusListAsync();
+            return Ok(statuses);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving terminal statuses");
+            return StatusCode(500, "Error retrieving terminal statuses: " + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Simulate a complete terminal lifecycle (allocate -> use -> release)
     /// </summary>
     /// <param name="simulatedResponseDelayMs">Optional delay in milliseconds to simulate terminal usage time</param>
     /// <returns>Details about the simulation</returns>
-    [HttpPost("simulate-lifecycle")]
-    public async Task<IActionResult> SimulateTerminalLifecycle([FromQuery] int simulatedResponseDelayMs = 500)
+    [HttpPost("simulate-single-lifecycle")]
+    public async Task<IActionResult> SimulateSingleTerminalLifecycle()
     {
         try
         {
-            var startTime = DateTimeOffset.UtcNow;
             _logger.LogInformation("Starting terminal lifecycle simulation");
+            var result = await _simulator.SimulateTerminalLifecycleAsync();
+            _logger.LogInformation("Terminal lifecycle simulation completed successfully");
 
-            // Step 1: Allocate a terminal
-            _logger.LogInformation("Step 1: Allocating terminal");
-            var terminal = await _terminalService.AllocateTerminalAsync();
-            if (terminal == null)
+            return Ok(new
             {
-                return StatusCode(503, "No terminals available for simulation");
-            }
-
-            // Step 2: Get or create a session
-            _logger.LogInformation("Step 2: Creating/getting session for terminal {TerminalId}", terminal.Id);
-            var sessionId = await _terminalService.GetOrCreateSessionAsync(terminal.Id);
-
-            // Step 3: Simulate using the terminal (making a request)
-            _logger.LogInformation("Step 3: Simulating terminal usage with {TerminalId}, delay: {Delay}ms", 
-                terminal.Id, simulatedResponseDelayMs);
-            
-            // Simulate a terminal operation by waiting
-            await Task.Delay(simulatedResponseDelayMs);
-            
-            // Update last used time to show activity
-            await _terminalService.UpdateLastUsedTimeAsync(terminal.Id);
-            
-            // Step 4: Release the terminal back to the pool
-            _logger.LogInformation("Step 4: Releasing terminal {TerminalId} back to the pool", terminal.Id);
-            await _terminalService.ReleaseTerminalAsync(terminal.Id);
-
-            var endTime = DateTimeOffset.UtcNow;
-            var duration = endTime - startTime;
-
-            // Return details about the simulation
-            return Ok(new 
-            {
-                Success = true,
-                TerminalId = terminal.Id,
-                SessionId = sessionId,
-                SimulationSteps = new[]
-                {
-                    "1. Allocated terminal from pool",
-                    "2. Created/retrieved session for terminal",
-                    "3. Simulated terminal usage (request/response)",
-                    "4. Released terminal back to the pool"
-                },
-                Duration = $"{duration.TotalMilliseconds:F2}ms",
-                StartTime = startTime,
-                EndTime = endTime
+                Message = "Terminal lifecycle simulation completed successfully",
+                SimulationResults = result
             });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during terminal lifecycle simulation");
             return StatusCode(500, "Error simulating terminal lifecycle: " + ex.Message);
+        }
+    }
+    
+    /// <summary>
+    /// Run terminal lifecycle simulation
+    /// </summary>
+    /// <param name="iterations">Number of operations to perform</param>
+    /// <param name="parallelism">Number of parallel operations</param>
+    [HttpGet("lifecycle-simulation")]
+    public async Task<IActionResult> RunLifecycleSimulation(
+        [FromQuery] int iterations = 100,
+        [FromQuery] int parallelism = 10)
+    {
+        try
+        {
+            _logger.LogInformation(
+                "Starting terminal lifecycle simulation: {Iterations} iterations, {Parallelism} parallel operations",
+                iterations, parallelism);
+
+            // Run the simulation using the injected simulator
+            var result = await _simulator.RunSimulationAsync(iterations, parallelism);
+
+            return Ok(new
+            {
+                Message = "Terminal lifecycle simulation completed successfully",
+                SimulationResults = result,
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error running terminal lifecycle simulation");
+            return StatusCode(500, "Error running terminal lifecycle simulation: " + ex.Message);
         }
     }
 }
