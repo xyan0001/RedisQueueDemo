@@ -97,6 +97,7 @@ public class TerminalLifecycleSimulator(
         operationStopwatch.Start();
         var simulatedUsageTimeMs = 100;
         simulatedUsageTimeMs = Math.Max(100, simulatedUsageTimeMs + _random.Next(-50, 150)); // Add some variability
+        var terminalId = "";
         try
         {
             // Step 1: Allocate a terminal
@@ -120,28 +121,16 @@ public class TerminalLifecycleSimulator(
                     Parallelism = 1
                 };
             }
-
+            terminalId = terminal.Id;
             // Step 2: Get or create a session
             _logger.LogInformation("Step 2: Getting or creating session for terminal {TerminalId}", terminal.Id);
             var sessionId = await _terminalService.GetOrCreateSessionAsync(terminal.Id);
+            _logger.LogInformation("Get session: {sessionId} for {TerminalId}", sessionId, terminal.Id);
 
-            // Step 3: Refresh the session to keep it active
-            _logger.LogInformation("Step 3: Refreshing session for terminal {TerminalId}, session {SessionId}",
-                terminal.Id, sessionId);
-            await _terminalService.RefreshSessionTtlAsync(terminal.Id);
-
-            // Step 4: Simulate using the terminal (making a request)
-            _logger.LogInformation("Step 4: Simulating terminal usage with {TerminalId}, delay: {Delay}ms",
+            // Step 3: Simulate using the terminal (making a request)
+            _logger.LogInformation("Step 3: Simulating terminal usage with {TerminalId}, delay: {Delay}ms",
                 terminal.Id, simulatedUsageTimeMs);
             await Task.Delay(simulatedUsageTimeMs);
-
-            // Step 5: Update the last used time
-            _logger.LogInformation("Step 5: Updating last used time for terminal {TerminalId}", terminal.Id);
-            await _terminalService.UpdateLastUsedTimeAsync(terminal.Id);
-
-            // Step 6: Release the terminal back to the pool
-            _logger.LogInformation("Step 6: Releasing terminal {TerminalId} back to the pool", terminal.Id);
-            await _terminalService.ReleaseTerminalAsync(terminal.Id);
 
             operationStopwatch.Stop();
 
@@ -172,6 +161,13 @@ public class TerminalLifecycleSimulator(
         }
         finally
         {
+            // Step 4: Release the terminal back to the pool
+            if (!string.IsNullOrWhiteSpace(terminalId))
+            {
+                _logger.LogInformation("Step 4: Releasing terminal {TerminalId} back to the pool", terminalId);
+                await _terminalService.ReleaseTerminalAsync(terminalId);
+            }
+
             operationStopwatch.Stop();
             lock (_lockObject)
             {

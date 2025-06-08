@@ -30,20 +30,24 @@ To reduce Redis load and improve performance:
 
 1. Static terminal information is cached in-memory using `ConcurrentDictionary<string, TerminalInfo>`
 2. Cache is initialized during application startup
-3. Redis lookups are only performed for cache misses
-4. All terminal information writes update both Redis and the in-memory cache
-5. Thread-safe operations are ensured through `ConcurrentDictionary` APIs
-
-This optimization significantly reduces latency for terminal allocation and session creation operations.
+3. Thread-safe operations are ensured through `ConcurrentDictionary` APIs
 
 ### Redis Data Structure
 
 | Redis Key | Type | Purpose |
 |-----------|------|---------|
-| terminal:info:\<id\> | Hash | Static terminal information (URL, port, credentials) |
 | terminal:status:\<id\> | Hash | Dynamic status (available/in-use, pod_id, last_used_time) |
 | terminal:session:\<id\> | String | Session ID with auto-expiration (TTL: 300s) |
-| terminal_pool | Set | Available terminal IDs for quick allocation |
+| terminal_pool | List | Available terminal IDs for quick allocation |
+
+Why Redis List?
+
+Redis List provides efficient atomic operations for terminal allocation and release, ensuring that multiple pods can safely allocate terminals.
+
+- Synchronous blocking: Request do not fail if no terminals are available. They synchronously wait until a terminal is released.
+- High performance: `BLPOP` is a native Redis command, extremely efficient and capable of handling a large number of concurrent requests.
+- Instant availability: As soon as a terminal is released, a waiting request is immediately awakened - no polling required.
+- Simple and reliable: Redis ensures atomicity, making it a natural fit for managing terminal availability without complex locking mechanisms.
 
 ## Features
 
@@ -176,8 +180,6 @@ SADD terminal_pool terminal-041
 - Minimum terminals needed: 667 ÷ 5 = 134 terminals
 
 The system is initially configured with 40 terminals but can be expanded using the Admin API.
-
-## Performance Optimizations
 
 ### Terminal Information Caching
 
@@ -465,51 +467,75 @@ Potential enhancements to the caching system:
 
    This command will remove all keys in the current database, effectively resetting the terminal management system.
 
-2. To clear the terminal pool if needed:
+2. To see all terminals in the queue:
 
     ```redis
-    DEL terminal_pool
+    LRANGE terminal_queue 0 -1
     ```
 
-3. To see all terminals in the pool:
+   Lists all terminal IDs currently available for allocation in the queue.
+
+3. To check the length of the terminal queue:
 
     ```redis
-    SMEMBERS terminal_pool
+    LLEN terminal_queue
     ```
 
-4. To check a terminal status:
+   This command returns the number of terminals currently in the queue, which helps monitor availability.
+
+4. To clear the terminal queue if needed:
 
     ```redis
-    HGETALL terminal:status:terminal-4850
+    DEL terminal_queue
     ```
 
-5. To see all terminal sessions:
+   This command will delete the `terminal_queue` list, removing all terminals currently in the queue.
+
+5. To check all terminals statuses:
+
+    ```redis
+    KEYS terminal:status:*
+    HGETALL terminal:status:<id>
+    ```
+
+   Use the first command to list all status keys, then use the second to view the status for each terminal.
+
+6. To check a specific terminal's status:
+
+    ```redis
+    HGETALL terminal:status:<id>
+    ```
+
+   Replace `<id>` with the terminal ID (e.g., `terminal-001`).
+
+7. To see all terminal sessions:
 
     ```redis
     KEYS terminal:session:*
     ```
 
-6. To check a specific terminal's session:
+   Lists all session keys for active terminal sessions.
+
+8. To check a specific terminal's session:
 
     ```redis
-    GET terminal:session:terminal-4850
+    GET terminal:session:<id>
     ```
 
-7. To manually add a terminal back to the pool:
+   Replace `<id>` with the terminal ID to get the session ID (if any).
+
+9. To manually lease a terminal (simulate allocation):
 
     ```redis
-    SADD terminal_pool terminal-4850
+    BLPOP terminal_queue 0
     ```
 
-8. To get a terminal status:
+   This will block until a terminal is available and then remove and return it from the queue.
+
+10. To manually release a terminal back to the queue:
 
     ```redis
-    HGET terminal:status:terminal-4850 status
+    RPUSH terminal_queue <id>
     ```
 
-9. To get all the information about a terminal's status:
-
-    ```redis
-    HGETALL terminal:status:terminal-4850
-    ```
-
+   Replace `<id>` with the terminal ID to add it back to the queue for allocation.

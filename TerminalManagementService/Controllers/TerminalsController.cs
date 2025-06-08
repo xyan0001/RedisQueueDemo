@@ -68,25 +68,6 @@ public class TerminalsController(
     }
 
     /// <summary>
-    /// Refresh the session for a terminal
-    /// </summary>
-    [HttpPost("session/{id}/refresh")]
-    public async Task<IActionResult> RefreshSession(string id)
-    {
-        try
-        {
-            await _terminalService.RefreshSessionTtlAsync(id);
-            await _terminalService.UpdateLastUsedTimeAsync(id);
-            return Ok(new { Message = $"Session for terminal {id} refreshed successfully" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error refreshing session for terminal {Id}", id);
-            return StatusCode(500, $"Error refreshing session for terminal {id}");
-        }
-    }
-
-    /// <summary>
     /// Clean up orphaned terminals
     /// </summary>
     /// <returns>Result of the cleanup operation</returns>
@@ -127,9 +108,8 @@ public class TerminalsController(
     /// <summary>
     /// Simulate a complete terminal lifecycle (allocate -> use -> release)
     /// </summary>
-    /// <param name="simulatedResponseDelayMs">Optional delay in milliseconds to simulate terminal usage time</param>
     /// <returns>Details about the simulation</returns>
-    [HttpPost("simulate-single-lifecycle")]
+    [HttpGet("simulate-single-lifecycle")]
     public async Task<IActionResult> SimulateSingleTerminalLifecycle()
     {
         try
@@ -150,7 +130,7 @@ public class TerminalsController(
             return StatusCode(500, "Error simulating terminal lifecycle: " + ex.Message);
         }
     }
-    
+
     /// <summary>
     /// Run terminal lifecycle simulation
     /// </summary>

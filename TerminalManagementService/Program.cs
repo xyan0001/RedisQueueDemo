@@ -37,31 +37,58 @@ builder.Services.AddHealthChecks();
 var app = builder.Build();
 
 // If running in Redis initialization mode, just initialize Redis and exit
-if (initializeRedisOnly)
+//if (initializeRedisOnly)
+//{
+//    using (var scope = app.Services.CreateScope())
+//    {
+//        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+//        logger.LogInformation("Running in Redis initialization mode");
+
+//        try
+//        {
+//            var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
+
+//            // Force initialization regardless of configuration setting
+//            logger.LogInformation("Initializing Redis terminals...");
+
+//            await terminalService.InitializeTerminalsAsync();
+//            logger.LogInformation("Redis initialization completed successfully");
+//        }
+//        catch (Exception ex)
+//        {
+//            logger.LogError(ex, "Error initializing Redis");
+//            Environment.ExitCode = 1;
+//        }
+
+//        return; // Exit the application after initialization
+//    }
+//}
+
+
+using (var scope = app.Services.CreateScope())
 {
-    using (var scope = app.Services.CreateScope())
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Starting Redis initialization check...");
+
+    try
     {
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        logger.LogInformation("Running in Redis initialization mode");
+        var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
 
-        try
+        // If Redis already initialized, skip this step
+        if (!await terminalService.IsInitialized())
         {
-            var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
-
-            // Force initialization regardless of configuration setting
             logger.LogInformation("Initializing Redis terminals...");
             await terminalService.InitializeTerminalsAsync();
             logger.LogInformation("Redis initialization completed successfully");
         }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error initializing Redis");
-            Environment.ExitCode = 1;
-        }
-
-        return; // Exit the application after initialization
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error initializing Redis");
+        //Environment.ExitCode = 1;
     }
 }
+
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -74,30 +101,5 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
-
-// Initialize terminals and preload cache
-using (var scope = app.Services.CreateScope())
-{
-    var terminalService = scope.ServiceProvider.GetRequiredService<ITerminalService>();
-    try
-    {
-        await terminalService.InitializeTerminalsAsync();
-
-        // Preload terminal cache if service supports it
-        if (terminalService is RedisTerminalService redisTerminalService)
-        {
-            await redisTerminalService.PreloadTerminalCacheAsync();
-
-            var metrics = redisTerminalService.GetCacheMetrics();
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            logger.LogInformation("Terminal cache initialized with {Count} terminals", metrics.hits + metrics.misses);
-        }
-    }
-    catch (Exception ex)
-    {
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Error initializing terminals or preloading cache");
-    }
-}
 
 app.Run();

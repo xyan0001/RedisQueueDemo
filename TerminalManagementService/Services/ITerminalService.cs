@@ -12,6 +12,12 @@ public interface ITerminalService
     /// </summary>
     Task InitializeTerminalsAsync();
 
+    /// <summary>
+    /// Preload terminal information into memory
+    /// </summary>
+    /// <returns></returns>
+    void PreloadTerminalsInfoToMemoryAsync();
+
     Task<bool> IsInitialized();
 
     /// <summary>
@@ -25,19 +31,9 @@ public interface ITerminalService
     Task ReleaseTerminalAsync(string terminalId);
 
     /// <summary>
-    /// Get or create a session for a terminal
+    /// Get or create a session for a terminal. Also refreshes the TTL for the session.
     /// </summary>
     Task<string> GetOrCreateSessionAsync(string terminalId);
-
-    /// <summary>
-    /// Refresh the session timeout (TTL, time to live) for a terminal
-    /// </summary>
-    Task RefreshSessionTtlAsync(string terminalId);
-
-    /// <summary>
-    /// Update the last used time for a terminal
-    /// </summary>
-    Task UpdateLastUsedTimeAsync(string terminalId);
 
     /// <summary>
     /// Reclaim orphaned terminals

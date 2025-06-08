@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
-using System.Text.Json;
 using TerminalManagementService.Models;
 
 namespace TerminalManagementService.Services;
@@ -127,6 +126,58 @@ public class RedisTerminalService : ITerminalService
         }
     }
 
+    public void PreloadTerminalsInfoToMemoryAsync()
+    {
+        try
+        {
+            // Get terminals data from configuration
+            var terminalsData = _appConfig.GetSection("TerminalsData").Get<string[]>();
+            if (terminalsData == null || terminalsData.Length == 0)
+            {
+                _logger.LogWarning("No terminals data found in configuration. Skipping initialization.");
+                return;
+            }
+
+            _logger.LogInformation("Found {Count} terminals in configuration", terminalsData.Length);
+
+            foreach (var terminalDataString in terminalsData)
+            {
+                // Parse terminal data string
+                // Format: Address|Port|Username|Password|TerminalId|Branch
+                var parts = terminalDataString.Split('|');
+                if (parts.Length < 6)
+                {
+                    _logger.LogWarning("Invalid terminal data format for entry: {Data}", terminalDataString);
+                    continue;
+                }
+
+                // Extract terminal ID from the data string (5th element)
+                if (!int.TryParse(parts[4], out int terminalNumber))
+                {
+                    _logger.LogWarning("Invalid terminal ID in data: {Data}", terminalDataString);
+                    continue;
+                }
+
+                string terminalId = $"{_config.TerminalIdPrefix}{terminalNumber}";
+
+                // Create terminal info for cache - no need to store in Redis
+                var terminalInfo = CreateTerminalInfoFromString(terminalId, terminalDataString);
+                // Add to in-memory cache first
+                if (_terminalInfoCache.TryAdd(terminalId, terminalInfo))
+                {
+                    _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
+                }
+            }
+
+            _logger.LogInformation("Terminal preload completed.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error preloading terminals in memory");
+            throw;
+        }
+    }
+
     public async Task<bool> IsInitialized()
     {
         // Get terminals data from configuration
@@ -211,18 +262,15 @@ public class RedisTerminalService : ITerminalService
     }
 
     /// <summary>
-    /// Allocate a terminal from the pool (parameterless overload for interface compliance)
-    /// </summary>
-    public async Task<TerminalInfo?> AllocateTerminalAsync()
-    {
-        return await AllocateTerminalAsync(20);
-    }
-
-    /// <summary>
     /// Release a terminal back to the pool
     /// </summary>
     public async Task ReleaseTerminalAsync(string terminalId)
     {
+        if (string.IsNullOrEmpty(terminalId))
+        {
+            _logger.LogWarning("ReleaseTerminalAsync called with null or empty terminalId");
+            return;
+        }
         _logger.LogInformation("Releasing terminal: {TerminalId}", terminalId);
         try
         {
@@ -258,45 +306,59 @@ public class RedisTerminalService : ITerminalService
         if (!string.IsNullOrEmpty(sessionId))
         {
             // Session exists, refresh TTL
-            await _db.KeyExpireAsync(sessionKey, TimeSpan.FromMinutes(30));
+            await _db.KeyExpireAsync(sessionKey, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
             return sessionId;
         }
         // TODO: Create new session. This needs to be implemented by the real application logic.
         sessionId = $"session-{terminalId}-{Guid.NewGuid()}";
-        await _db.StringSetAsync(sessionKey, sessionId, TimeSpan.FromMinutes(30));
+        await _db.StringSetAsync(sessionKey, sessionId, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
         return sessionId;
     }
 
     /// <summary>
-    /// Refresh the session timeout (TTL) for a terminal
+    /// Update status for a terminal (public for interface compliance)
     /// </summary>
-    public async Task RefreshSessionTtlAsync(string terminalId)
+    private async Task UpdateTerminalStatusAsync(TerminalStatus status)
     {
-        _logger.LogInformation("RefreshSessionTtlAsync called for terminal: {TerminalId}", terminalId);
-        string sessionKey = string.Format(TerminalSessionKeyPattern, terminalId);
-        bool exists = await _db.KeyExistsAsync(sessionKey);
-        if (exists)
+        string statusKey = string.Format(TerminalStatusKeyPattern, status.TerminalId);
+        var hashEntries = new HashEntry[]
         {
-            await _db.KeyExpireAsync(sessionKey, TimeSpan.FromMinutes(30));
-            _logger.LogDebug("Session TTL refreshed for terminal: {TerminalId}", terminalId);
-        }
+            new HashEntry(nameof(TerminalStatus.TerminalId), status.TerminalId),
+            new HashEntry(nameof(TerminalStatus.Status), status.Status),
+            new HashEntry(nameof(TerminalStatus.PodName), status.PodName ?? string.Empty),
+            new HashEntry(nameof(TerminalStatus.LastUsedTime), status.LastUsedTime)
+        };
+        await _db.HashSetAsync(statusKey, hashEntries);
+        await _db.KeyExpireAsync(statusKey, TimeSpan.FromMinutes(30));
+        _logger.LogDebug("Updated terminal status in Redis (hash): {TerminalId} - {Status}", status.TerminalId, status.Status);
     }
 
     /// <summary>
-    /// Update the last used time for a terminal
+    /// Get the information of all terminals
     /// </summary>
-    public async Task UpdateLastUsedTimeAsync(string terminalId)
+    public async Task<List<TerminalStatus>> GetTerminalStatusListAsync()
     {
-        _logger.LogInformation("UpdateLastUsedTimeAsync called for terminal: {TerminalId}", terminalId);
-        string statusKey = string.Format(TerminalStatusKeyPattern, terminalId);
-        var statusJson = await _db.StringGetAsync(statusKey);
-        if (!statusJson.IsNullOrEmpty)
+        _logger.LogInformation("GetTerminalStatusListAsync called");
+        var server = _redis.GetServer(_redis.GetEndPoints().First());
+        var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
+        var terminalStatuses = new List<TerminalStatus>();
+        foreach (var key in statusKeys)
         {
-            var status = JsonSerializer.Deserialize<TerminalStatus>(statusJson!);
-            status!.LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            await UpdateTerminalStatusAsync(status);
-            _logger.LogDebug("Updated last used time for terminal: {TerminalId}", terminalId);
+            var hash = await _db.HashGetAllAsync(key);
+            if (hash.Length > 0)
+            {
+                var status = new TerminalStatus
+                {
+                    TerminalId = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.TerminalId)).Value!,
+                    Status = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.Status)).Value!,
+                    PodName = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.PodName)).Value!,
+                    LastUsedTime = (long)hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.LastUsedTime)).Value
+                };
+                terminalStatuses.Add(status);
+            }
         }
+        _logger.LogInformation("Retrieved {Count} terminal statuses from Redis", terminalStatuses.Count);
+        return terminalStatuses;
     }
 
     /// <summary>
@@ -305,19 +367,22 @@ public class RedisTerminalService : ITerminalService
     public async Task ReclaimOrphanedTerminalsAsync()
     {
         _logger.LogInformation("ReclaimOrphanedTerminalsAsync called");
-        // Find all terminal status keys
         var server = _redis.GetServer(_redis.GetEndPoints().First());
         var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var reclaimed = 0;
         foreach (var key in statusKeys)
         {
-            var statusJson = await _db.StringGetAsync(key);
-            if (statusJson.IsNullOrEmpty) continue;
-            var status = JsonSerializer.Deserialize<TerminalStatus>(statusJson!);
-            if (status == null) continue;
-            // Orphaned if in use, but last used time is too old (e.g., 2x session TTL)
-            if (status.Status == TerminalStatusConstants.InUse && now - status.LastUsedTime > 60 * 60) // 1 hour
+            var hash = await _db.HashGetAllAsync(key);
+            if (hash.Length == 0) continue;
+            var status = new TerminalStatus
+            {
+                TerminalId = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.TerminalId)).Value!,
+                Status = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.Status)).Value!,
+                PodName = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.PodName)).Value!,
+                LastUsedTime = (long)hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.LastUsedTime)).Value
+            };
+            if (status.Status == TerminalStatusConstants.InUse && now - status.LastUsedTime > 60 * 60)
             {
                 _logger.LogWarning("Reclaiming orphaned terminal: {TerminalId}", status.TerminalId);
                 status.Status = TerminalStatusConstants.Available;
@@ -337,16 +402,20 @@ public class RedisTerminalService : ITerminalService
     public async Task ShutdownAsync()
     {
         _logger.LogInformation("ShutdownAsync called");
-        // Find all terminal status keys
         var server = _redis.GetServer(_redis.GetEndPoints().First());
         var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         var released = 0;
         foreach (var key in statusKeys)
         {
-            var statusJson = await _db.StringGetAsync(key);
-            if (statusJson.IsNullOrEmpty) continue;
-            var status = JsonSerializer.Deserialize<TerminalStatus>(statusJson!);
-            if (status == null) continue;
+            var hash = await _db.HashGetAllAsync(key);
+            if (hash.Length == 0) continue;
+            var status = new TerminalStatus
+            {
+                TerminalId = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.TerminalId)).Value!,
+                Status = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.Status)).Value!,
+                PodName = hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.PodName)).Value!,
+                LastUsedTime = (long)hash.FirstOrDefault(e => e.Name == nameof(TerminalStatus.LastUsedTime)).Value
+            };
             if (status.Status == TerminalStatusConstants.InUse && status.PodName == _podId)
             {
                 _logger.LogInformation("Releasing terminal {TerminalId} held by this pod", status.TerminalId);
@@ -359,41 +428,6 @@ public class RedisTerminalService : ITerminalService
             }
         }
         _logger.LogInformation("Shutdown released {Count} terminals held by this pod", released);
-    }
-
-    /// <summary>
-    /// Get the information of all terminals
-    /// </summary>
-    public async Task<List<TerminalStatus>> GetTerminalStatusListAsync()
-    {
-        _logger.LogInformation("GetTerminalStatusListAsync called");
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
-        var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
-        var terminalStatuses = new List<TerminalStatus>();
-        foreach (var key in statusKeys)
-        {
-            var statusJson = await _db.StringGetAsync(key);
-            if (!statusJson.IsNullOrEmpty)
-            {
-                var status = JsonSerializer.Deserialize<TerminalStatus>(statusJson!);
-                if (status != null)
-                {
-                    terminalStatuses.Add(status);
-                }
-            }
-        }
-        _logger.LogInformation("Retrieved {Count} terminal statuses from Redis", terminalStatuses.Count);
-        return terminalStatuses;
-    }
-
-    /// <summary>
-    /// Update status for a terminal (public for interface compliance)
-    /// </summary>
-    private async Task UpdateTerminalStatusAsync(TerminalStatus status)
-    {
-        string statusKey = string.Format(TerminalStatusKeyPattern, status.TerminalId);
-        await _db.StringSetAsync(statusKey, JsonSerializer.Serialize(status), TimeSpan.FromMinutes(30));
-        _logger.LogDebug("Updated terminal status in Redis: {TerminalId} - {Status}", status.TerminalId, status.Status);
     }
 
     /// <summary>

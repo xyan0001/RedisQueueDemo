@@ -4,8 +4,6 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TerminalManagementService", "TerminalManagementService\TerminalManagementService.csproj", "{96706FAB-A7F5-2E04-360C-FB027CB10DCB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CacheTestApp", "CacheTestApp\CacheTestApp.csproj", "{06F47C4D-3D2B-6E4A-A22A-3C5E9E918050}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -16,10 +14,6 @@ Global
 		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{96706FAB-A7F5-2E04-360C-FB027CB10DCB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{06F47C4D-3D2B-6E4A-A22A-3C5E9E918050}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{06F47C4D-3D2B-6E4A-A22A-3C5E9E918050}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{06F47C4D-3D2B-6E4A-A22A-3C5E9E918050}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{06F47C4D-3D2B-6E4A-A22A-3C5E9E918050}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
