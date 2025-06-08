@@ -36,506 +36,166 @@ To reduce Redis load and improve performance:
 
 | Redis Key | Type | Purpose |
 |-----------|------|---------|
-| terminal:status:\<id\> | Hash | Dynamic status (available/in-use, pod_id, last_used_time) |
-| terminal:session:\<id\> | String | Session ID with auto-expiration (TTL: 300s) |
-| terminal_pool | List | Available terminal IDs for quick allocation |
+| terminal:status:<id> | Hash | Dynamic status (available/in-use, pod_id, last_used_time) |
+| terminal:session:<id> | String | Session ID with auto-expiration (TTL: 300s) |
+| terminal_queue | List | Available terminal IDs for quick allocation |
 
 Why Redis List?
 
 Redis List provides efficient atomic operations for terminal allocation and release, ensuring that multiple pods can safely allocate terminals.
 
-- Synchronous blocking: Request do not fail if no terminals are available. They synchronously wait until a terminal is released.
+- Synchronous blocking: Requests block if no terminals are available, waiting until a terminal is released.
 - High performance: `BLPOP` is a native Redis command, extremely efficient and capable of handling a large number of concurrent requests.
-- Instant availability: As soon as a terminal is released, a waiting request is immediately awakened - no polling required.
+- Instant availability: As soon as a terminal is released, a waiting request is immediately awakened—no polling required.
 - Simple and reliable: Redis ensures atomicity, making it a natural fit for managing terminal availability without complex locking mechanisms.
+
+> **Note:** The system now uses a Redis List (`terminal_queue`) for terminal allocation and release. All allocation uses `BLPOP`, and release uses `RPUSH`.
 
 ## Features
 
 ### Terminal Initialization
 
-When the application starts, terminals are initialized with Redis commands:
+When the application starts, terminals are initialized from configuration and added to Redis:
 
 ```redis
 # For each terminal (e.g., terminal-001)
-HSET terminal:info:terminal-001 id "terminal-001" url "example.com" port 22 username "user1" password "pass1"
-HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689600
-SADD terminal_pool terminal-001
+HSET terminal:status:terminal-001 TerminalId "terminal-001" Status "available" PodName "" LastUsedTime 1717689600
+RPUSH terminal_queue terminal-001
 ```
 
 The system:
+
 1. Reads terminal configuration from appsettings.json
-2. Creates terminal records in Redis with `HSET` commands
-3. Adds terminal IDs to the available pool with `SADD`
+2. Creates terminal status hashes in Redis
+3. Adds terminal IDs to the available queue with `RPUSH`
 
 ### Terminal Allocation/Release
 
 #### Allocation Process
 
 ```redis
-# Atomically pop a terminal from the pool
-SPOP terminal_pool                                 # Returns "terminal-001"
+# Atomically pop a terminal from the queue
+BLPOP terminal_queue 0 # Blocks until a terminal is available
 
 # Update status to in-use
-HSET terminal:status:terminal-001 status "in_use" pod_id "pod-abc123" last_used_time 1717689700
-
-# Get terminal information
-HGETALL terminal:info:terminal-001                 # Returns all terminal details
+HSET terminal:status:terminal-001 Status "in_use" PodName "pod-abc123" LastUsedTime 1717689700
 ```
 
-The `SPOP` command atomically removes and returns a random element from the set, preventing race conditions.
+#### Release Process
 
-#### Session Management
+```redis
+# Update status to available
+HSET terminal:status:terminal-001 Status "available" PodName "" LastUsedTime 1717689800
+# Add back to queue
+RPUSH terminal_queue terminal-001
+```
+
+### Session Management
 
 ```redis
 # Check if session exists
-GET terminal:session:terminal-001                  # Returns session ID or nil
-
-# If nil, login and create session
-SET terminal:session:terminal-001 "session-xyz" EX 300  # Create with 5-minute TTL
-
-# If exists, refresh session TTL
-EXPIRE terminal:session:terminal-001 300           # Reset TTL to 5 minutes
+GET terminal:session:terminal-001
+# If nil, create session with TTL
+SET terminal:session:terminal-001 "session-xyz" EX 300
+# Refresh session TTL
+EXPIRE terminal:session:terminal-001 300
 ```
 
-During active usage, the pod periodically updates the last_used_time:
+### Crash Recovery & Orphan Reclamation
+
+- The system periodically scans all terminal status hashes.
+- If a terminal is marked in-use but has not been used for a threshold period, it is reclaimed:
 
 ```redis
-HSET terminal:status:terminal-001 last_used_time 1717689730
+HSET terminal:status:terminal-001 Status "available" PodName "" LastUsedTime 1717689950
+RPUSH terminal_queue terminal-001
 ```
-
-#### Terminal Release
-
-```redis
-# Atomic release using transaction
-MULTI
-HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689800
-SADD terminal_pool terminal-001
-EXEC
-```
-
-The `MULTI`/`EXEC` commands create a Redis transaction to ensure both operations (status update and adding back to pool) happen atomically.
-
-### Crash Recovery
-
-The system automatically detects and recovers from pod crashes:
-
-```redis
-# For each terminal status key
-SCAN 0 MATCH terminal:status:* COUNT 1000          # Efficiently iterate through keys
-HGETALL terminal:status:terminal-002               # Get status, pod_id, last_used_time
-
-# If status is "in_use" and last_used_time is too old (e.g., >30s ago)
-MULTI
-HSET terminal:status:terminal-002 status "available" pod_id "" last_used_time 1717689950
-SADD terminal_pool terminal-002
-EXEC
-```
-
-1. A background service periodically scans all terminals with `SCAN`
-2. Terminals with old `last_used_time` (> 30s) are considered orphaned
-3. Orphaned terminals are reclaimed with a transaction
 
 ### Graceful Shutdown
 
-When pods are terminated:
-
-```redis
-# Get all terminals used by this pod
-KEYS terminal:status:*                             # Get all status keys (SCAN in production)
-
-# For each key, check if used by this pod
-HGET terminal:status:terminal-001 pod_id           # Check if "pod-abc123"
-
-# For each terminal used by this pod
-MULTI
-HSET terminal:status:terminal-001 status "available" pod_id "" last_used_time 1717689900
-SADD terminal_pool terminal-001
-EXEC
-```
-
-1. The preStop lifecycle hook provides time for cleanup
-2. All terminals allocated to the terminating pod are released
-3. Session data remains in Redis until natural expiration
+- On shutdown, all terminals allocated to the current pod are released using the same logic as above.
 
 ### Dynamic Terminal Expansion
 
-Adding new terminals to the pool:
+- New terminals can be added by updating configuration and re-initializing, or via the Admin API.
 
-```redis
-# For each new terminal (e.g., terminal-041)
-HSET terminal:info:terminal-041 id "terminal-041" url "example.com" port 22 username "user41" password "pass41"
-HSET terminal:status:terminal-041 status "available" pod_id "" last_used_time 1717690000
-SADD terminal_pool terminal-041
-```
+## Redis Connection Architecture
 
-1. New terminals can be added through the Admin API
-2. Existing pods discover new terminals through the `terminal_pool` set
-3. No service disruption during expansion
-
-## Scaling Calculations
-
-- Each request takes 200ms to process
-- Each terminal can handle 5 requests per second (1000ms ÷ 200ms)
-- Required capacity: 667 QPS
-- Minimum terminals needed: 667 ÷ 5 = 134 terminals
-
-The system is initially configured with 40 terminals but can be expanded using the Admin API.
-
-### Terminal Information Caching
-
-The system implements an in-memory caching strategy to reduce Redis load:
-
-```csharp
-// Terminal info cache
-private readonly ConcurrentDictionary<string, TerminalInfo> _terminalInfoCache;
-
-// Helper method to get terminal info from cache or Redis
-private async Task<TerminalInfo> GetTerminalInfoAsync(string terminalId)
-{
-    // Try to get from cache first
-    if (_terminalInfoCache.TryGetValue(terminalId, out var cachedInfo))
-    {
-        Interlocked.Increment(ref _cacheHits);
-        _logger.LogDebug("Terminal info retrieved from cache: {TerminalId}", terminalId);
-        return cachedInfo;
-    }
-
-    // Not in cache, get from Redis
-    Interlocked.Increment(ref _cacheMisses);
-    _logger.LogDebug("Terminal info not in cache, retrieving from Redis: {TerminalId}", terminalId);
-    string infoKey = string.Format(TerminalInfoKeyPattern, terminalId);
-    var hashEntries = await _db.HashGetAllAsync(infoKey);
-    
-    // [Processing logic...]
-    
-    // Add to cache
-    _terminalInfoCache.TryAdd(terminalId, terminalInfo);
-    _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
-    
-    return terminalInfo;
-}
-```
-
-Key benefits:
-1. **Reduced Redis operations**: Frequent terminal allocations don't require Redis reads
-2. **Lower latency**: In-memory cache access is significantly faster than Redis
-3. **Reduced network traffic**: Fewer Redis calls means less network utilization
-4. **Improved scalability**: System can handle higher request volumes
-5. **Graceful degradation**: Falls back to Redis if cache entry doesn't exist
-6. **Thread safety**: Uses `ConcurrentDictionary` and atomic counters for thread-safe operations
-7. **Detailed metrics**: Tracks cache hits and misses for performance monitoring
-
-During application startup, the cache is preloaded with all terminal information to ensure high performance from the start:
-
-```csharp
-// Preload terminal cache if service supports it
-if (terminalService is RedisTerminalService redisTerminalService)
-{
-    await redisTerminalService.PreloadTerminalCacheAsync();
-    
-    var metrics = redisTerminalService.GetCacheMetrics();
-    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-    logger.LogInformation("Terminal cache initialized with {Count} terminals", metrics.hits + metrics.misses);
-}
-```
-
-### Cache Performance Test Results
-
-Performance testing shows significant benefits from the caching implementation:
-
-| Test | Duration | Operations | Avg Time per Operation | Cache Hit Rate |
-|------|----------|------------|------------------------|----------------|
-| Initial terminal access | 204ms | 40 terminals | 5.1ms per terminal | - |
-| Repeated access with caching | 4535ms | 1000 operations | 4.535ms per operation | 100% |
-
-The test results demonstrate:
-1. **Consistent performance**: Even with 1000 operations, the average time remains low
-2. **Perfect hit rate**: 100% cache hit rate with 1040 hits and 0 misses
-3. **Effective preloading**: The cache warming strategy successfully preloads all terminals
+- The system uses two separate Redis connections:
+  - **Default connection**: Used for allocation (BLPOP) and most operations.
+  - **Release connection**: Dedicated for release operations (RPUSH) to avoid deadlocks and connection starvation under high concurrency.
+- This ensures that even if all allocation threads are blocked, releases can still proceed.
 
 ## API Endpoints
 
 ### Terminal Management
 
-- `POST /api/terminals/allocate`: Allocates a terminal from the pool
+- `POST /api/terminals/allocate`: Allocates a terminal from the pool and returns terminal details with a session ID
 - `POST /api/terminals/release/{id}`: Releases a terminal back to the pool
-- `POST /api/terminals/session/{id}/refresh`: Refreshes a terminal session
+- `POST /api/terminals/cleanup`: Cleans up orphaned/inactive terminals (admin/maintenance)
+- `GET /api/terminals/statuses`: Returns the status of all terminals (operational/diagnostic endpoint)
+- `GET /api/terminals/simulate-single-lifecycle`: Simulates a full allocation/use/release lifecycle (for testing)
+- `GET /api/terminals/lifecycle-simulation?iterations={int}&parallelism={int}`: Runs a configurable lifecycle simulation with specified iterations and parallelism (for load testing)
 
-### Administration
+## Operational Notes
 
-- `POST /api/admin/terminals/add`: Adds new terminals to the pool
-- `POST /api/admin/terminals/cleanup`: Forces cleanup of orphaned terminals
-- `GET /api/admin/cache/metrics`: Retrieves cache performance metrics
-- `GET /api/admin/cache/performance-test`: Runs cache performance tests
+- **Concurrency Limit**: Do not exceed the number of available terminals with concurrent allocations. The system will block on allocation if all terminals are in use.
+- **Deadlock Prevention**: The dual Redis connection design ensures that releases are always possible, even under heavy load.
+- **Redis Key Expiry**: Terminal status hashes and sessions have TTLs and will expire if not updated.
+- **Monitoring**: Use the provided endpoints and Redis commands to monitor queue length, terminal status, and cache performance.
 
-## Cache Performance Monitoring
+## Redis Commands (Quick Reference)
 
-The system includes built-in cache performance monitoring with the following metrics:
+- List all terminals in the queue:
 
-- **Cache Hits**: Number of successful retrievals from in-memory cache
-- **Cache Misses**: Number of cache misses requiring Redis lookups
-- **Hit Rate**: Percentage of cache hits (higher is better)
-- **Total Requests**: Total number of terminal info lookups
+  ```redis
+  LRANGE terminal_queue 0 -1
+  ```
 
-Example response from the metrics endpoint:
+- Check queue length:
 
-```json
-{
-  "hits": 1250,
-  "misses": 45,
-  "hitRate": 96.52,
-  "totalRequests": 1295,
-  "cacheStatus": "Active"
-}
-```
+  ```redis
+  LLEN terminal_queue
+  ```
 
-These metrics help operators monitor the effectiveness of the caching layer and make informed decisions about resource allocation. The built-in `/api/admin/cache/performance-test` endpoint also allows for on-demand performance testing to verify cache functionality.
+- Release a terminal manually:
 
-## Class Structure
+  ```redis
+  RPUSH terminal_queue <id>
+  ```
 
-```text
-ITerminalService (interface)
-├── InitializeTerminalsAsync()
-├── AddTerminalsAsync()
-├── AllocateTerminalAsync()
-├── ReleaseTerminalAsync()
-├── GetOrCreateSessionAsync()
-├── RefreshSessionAsync()
-├── UpdateLastUsedTimeAsync()
-├── ReclaimOrphanedTerminalsAsync()
-├── ShutdownAsync()
-└── GetCacheMetrics()
+- Allocate a terminal manually:
 
-RedisTerminalService (implementation)
-├── _terminalInfoCache: ConcurrentDictionary<string, TerminalInfo>
-├── _cacheHits, _cacheMisses: Cache performance counters
-├── GetTerminalInfoAsync() - Cache-first lookup for terminal info
-├── PreloadTerminalCacheAsync() - Preload all terminal info to cache
-└── [ITerminalService methods]
+  ```redis
+  BLPOP terminal_queue 0
+  ```
 
-TerminalCleanupService (background service)
-└── ExecuteAsync() - Periodically reclaims orphaned terminals
+- Check all keys of terminal status:
 
-TerminalsController (API controller)
-├── AllocateTerminal()
-├── ReleaseTerminal()
-└── RefreshSession()
+  ```redis
+  KYES terminal:status:*
+  ```
 
-AdminController (API controller)
-├── AddTerminals()
-├── CleanupTerminals()
-├── GetCacheMetrics()
-└── RunCachePerformanceTest()
+- Check terminal status:
 
-CachePerformanceTest
-└── RunTestsAsync() - Performs allocation/release cycles and reports metrics
-```
+  ```redis
+  HGETALL terminal:status:<id>
+  ```
 
-## Deployment
+- Check a terminal status by ID:
 
-### Prerequisites
+  ```redis
+  HGET terminal:status:<id> Status
+  ```
 
-- Kubernetes cluster
-- kubectl and kustomize installed
-- Docker for building images
-- Redis instance (standalone or cluster)
+- Check all session keys:
 
-### Deployment Steps
+  ```redis
+  KEYS terminal:session:*
+  ```
 
-1. Build the Docker image:
+- Check a session by ID:
 
-   ```bash
-   docker build -t terminal-management:latest .
-   ```
-
-2. Apply Kubernetes configuration:
-
-   ```bash
-   kubectl apply -k k8s/overlays/production
-   ```
-
-### Configuration
-
-Terminal settings can be configured in the Kubernetes ConfigMap:
-
-- URL and port for terminals
-- Username and password patterns
-- Initial terminal count
-- Session timeout settings
-- Redis connection string
-
-## Monitoring and Health
-
-The service includes:
-
-- Health endpoint at `/health`
-- Cache metrics endpoint at `/api/admin/cache/metrics`
-- Kubernetes readiness/liveness probes
-- Proper resource limits and requests
-
-## Cache Performance Testing
-
-The implementation includes comprehensive performance testing for the terminal caching system. Tests show significant performance improvements from using the in-memory cache layer:
-
-### Test Results Summary
-
-| Test | Duration | Operations | Avg Time per Operation | Cache Hit Rate |
-|------|----------|------------|------------------------|----------------|
-| Initial terminal access | 204ms | 40 terminals | 5.1ms per terminal | - |
-| Repeated access with caching | 4535ms | 1000 operations | 4.535ms per operation | 100% |
-
-These results demonstrate:
-
-1. **Effective Performance**: The system maintains consistent response times even under load
-2. **Perfect Cache Hit Rate**: 100% cache hit rate with 1040 hits and 0 misses
-3. **Cache Preloading Efficiency**: The preloading strategy successfully warms the cache
-
-### Testing Components
-
-Two testing components are available to verify cache performance:
-
-#### 1. CacheTestApp
-
-A standalone console application that performs the following:
-
-- Initializes terminals in Redis
-- Preloads the terminal cache
-- Conducts two performance tests:
-  - First access to all terminals
-  - Repeated access to terminals with caching (1000 operations)
-- Reports detailed performance metrics
-
-#### 2. AdminController.RunCachePerformanceTest
-
-A REST API endpoint that allows on-demand cache performance testing:
-
-- Available at `GET /api/admin/cache/performance-test`
-- Performs 1000 allocation/release operations
-- Returns cache metrics in the response
-- Useful for monitoring cache performance in production
-
-### Testing Methodology
-
-The performance testing methodology includes:
-
-1. **Terminal Allocation/Release Testing**:
-
-   ```csharp
-   // Repeated allocation and release 1000 times
-   for (int i = 0; i < 1000; i++)
-   {
-       var terminal = await _terminalService.AllocateTerminalAsync();
-       if (terminal != null)
-       {
-           await _terminalService.ReleaseTerminalAsync(terminal.Id);
-       }
-   }
-   ```
-
-2. **Cache Hit/Miss Tracking**:
-
-   ```csharp
-   // Try to get from cache first
-   if (_terminalInfoCache.TryGetValue(terminalId, out var cachedInfo))
-   {
-       Interlocked.Increment(ref _cacheHits);
-       return cachedInfo;
-   }
-
-   // Not in cache, get from Redis
-   Interlocked.Increment(ref _cacheMisses);
-   ```
-
-## Future Improvements
-
-Potential enhancements to the caching system:
-
-1. **Selective Caching**: For larger deployments, cache only the most frequently used terminals
-2. **Cache Eviction Policy**: Implement LRU eviction to manage memory usage
-3. **Cache Refresh Strategy**: Background task to periodically refresh the cache
-4. **Circuit Breaker**: Add circuit breaker pattern for Redis operations
-5. **Distributed Caching**: Consider distributed caching solutions for multi-pod deployments
-6. **Custom Cache Metrics**: Add Prometheus metrics for detailed monitoring
-
-## Redis commands
-
-1. To clear the database and reset terminal data:
-
-    ```redis
-    FLUSHDB
-    ```
-
-   This command will remove all keys in the current database, effectively resetting the terminal management system.
-
-2. To see all terminals in the queue:
-
-    ```redis
-    LRANGE terminal_queue 0 -1
-    ```
-
-   Lists all terminal IDs currently available for allocation in the queue.
-
-3. To check the length of the terminal queue:
-
-    ```redis
-    LLEN terminal_queue
-    ```
-
-   This command returns the number of terminals currently in the queue, which helps monitor availability.
-
-4. To clear the terminal queue if needed:
-
-    ```redis
-    DEL terminal_queue
-    ```
-
-   This command will delete the `terminal_queue` list, removing all terminals currently in the queue.
-
-5. To check all terminals statuses:
-
-    ```redis
-    KEYS terminal:status:*
-    HGETALL terminal:status:<id>
-    ```
-
-   Use the first command to list all status keys, then use the second to view the status for each terminal.
-
-6. To check a specific terminal's status:
-
-    ```redis
-    HGETALL terminal:status:<id>
-    ```
-
-   Replace `<id>` with the terminal ID (e.g., `terminal-001`).
-
-7. To see all terminal sessions:
-
-    ```redis
-    KEYS terminal:session:*
-    ```
-
-   Lists all session keys for active terminal sessions.
-
-8. To check a specific terminal's session:
-
-    ```redis
-    GET terminal:session:<id>
-    ```
-
-   Replace `<id>` with the terminal ID to get the session ID (if any).
-
-9. To manually lease a terminal (simulate allocation):
-
-    ```redis
-    BLPOP terminal_queue 0
-    ```
-
-   This will block until a terminal is available and then remove and return it from the queue.
-
-10. To manually release a terminal back to the queue:
-
-    ```redis
-    RPUSH terminal_queue <id>
-    ```
-
-   Replace `<id>` with the terminal ID to add it back to the queue for allocation.
+  ```redis
+  GET terminal:session:<id>
+  ```
