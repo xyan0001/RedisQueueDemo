@@ -17,17 +17,34 @@ builder.Services.AddSwaggerGen();
 builder.Services.Configure<TerminalConfiguration>(
     builder.Configuration.GetSection("TerminalConfiguration"));
 
-// Configure Redis
-builder.Services.AddSingleton<ConnectionMultiplexer>(sp =>
+// Register default Redis connection
+builder.Services.AddSingleton<DefaultRedisConnection>(sp =>
 {
     var connectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
     var options = ConfigurationOptions.Parse(connectionString);
-    options.AbortOnConnectFail = false; // Don't throw if Redis is unavailable
-    return ConnectionMultiplexer.Connect(options);
+    options.AbortOnConnectFail = false;
+    return new DefaultRedisConnection(ConnectionMultiplexer.Connect(options));
 });
 
-// Register services
-builder.Services.AddSingleton<ITerminalService, RedisTerminalService>();
+// Register release Redis connection
+builder.Services.AddSingleton<ReleaseRedisConnection>(sp =>
+{
+    var connectionString = builder.Configuration.GetConnectionString("RedisRelease") ?? builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+    var options = ConfigurationOptions.Parse(connectionString);
+    options.AbortOnConnectFail = false;
+    return new ReleaseRedisConnection(ConnectionMultiplexer.Connect(options));
+});
+
+// Register services with explicit injection for both Redis instances
+builder.Services.AddSingleton<ITerminalService>(sp =>
+{
+    var defaultRedis = sp.GetRequiredService<DefaultRedisConnection>();
+    var releaseRedis = sp.GetRequiredService<ReleaseRedisConnection>();
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TerminalConfiguration>>();
+    var appConfig = sp.GetRequiredService<IConfiguration>();
+    var logger = sp.GetRequiredService<ILogger<RedisTerminalService>>();
+    return new RedisTerminalService(defaultRedis.Connection, releaseRedis.Connection, config, appConfig, logger);
+});
 builder.Services.AddTransient<TerminalLifecycleSimulator>();
 //builder.Services.AddHostedService<TerminalCleanupService>();
 

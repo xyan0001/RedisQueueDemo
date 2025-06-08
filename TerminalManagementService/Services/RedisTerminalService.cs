@@ -9,6 +9,8 @@ public class RedisTerminalService : ITerminalService
 {
     private readonly ConnectionMultiplexer _redis;
     private readonly IDatabase _db;
+    private readonly ConnectionMultiplexer _releaseRedis;
+    private readonly IDatabase _releaseDb;
     private readonly ILogger<RedisTerminalService> _logger;
     private readonly TerminalConfiguration _config;
     private readonly IConfiguration _appConfig;
@@ -22,12 +24,15 @@ public class RedisTerminalService : ITerminalService
 
     public RedisTerminalService(
         ConnectionMultiplexer redis,
+        ConnectionMultiplexer releaseRedis,
         IOptions<TerminalConfiguration> config,
         IConfiguration appConfig,
         ILogger<RedisTerminalService> logger)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _db = _redis.GetDatabase();
+        _releaseRedis = releaseRedis ?? throw new ArgumentNullException(nameof(releaseRedis));
+        _releaseDb = _releaseRedis.GetDatabase();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
         _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
@@ -274,7 +279,6 @@ public class RedisTerminalService : ITerminalService
         _logger.LogInformation("Releasing terminal: {TerminalId}", terminalId);
         try
         {
-            // Update terminal status to Available
             var status = new TerminalStatus
             {
                 TerminalId = terminalId,
@@ -283,9 +287,8 @@ public class RedisTerminalService : ITerminalService
                 LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
             await UpdateTerminalStatusAsync(status);
-
-            // Add to available queue (list-based)
-            await _db.ListRightPushAsync(TerminalQueueKey, terminalId);
+            // Use _releaseDb for queue push
+            await _releaseDb.ListRightPushAsync(TerminalQueueKey, terminalId);
             _logger.LogInformation("Terminal released and added back to queue: {TerminalId}", terminalId);
         }
         catch (Exception ex)
