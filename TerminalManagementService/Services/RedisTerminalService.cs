@@ -7,10 +7,10 @@ namespace TerminalManagementService.Services;
 
 public class RedisTerminalService : ITerminalService
 {
-    private readonly ConnectionMultiplexer _redis;
-    private readonly IDatabase _db;
-    private readonly ConnectionMultiplexer _releaseRedis;
-    private readonly IDatabase _releaseDb;
+    private readonly BlockingRedisConnection _blockingRedisConnection;
+    private readonly IDatabase _blockingDb;
+    private readonly NonBlockingRedisConnection _nonBlockingRedisConnection;
+    private readonly IDatabase _nonBlockingDb;
     private readonly ILogger<RedisTerminalService> _logger;
     private readonly TerminalConfiguration _config;
     private readonly IConfiguration _appConfig;
@@ -23,16 +23,16 @@ public class RedisTerminalService : ITerminalService
     private const string TerminalQueueKey = "terminal_queue";
 
     public RedisTerminalService(
-        ConnectionMultiplexer redis,
-        ConnectionMultiplexer releaseRedis,
+        BlockingRedisConnection blockingRedisConnection,
+        NonBlockingRedisConnection nonBlockingRedisConnection,
         IOptions<TerminalConfiguration> config,
         IConfiguration appConfig,
         ILogger<RedisTerminalService> logger)
     {
-        _redis = redis ?? throw new ArgumentNullException(nameof(redis));
-        _db = _redis.GetDatabase();
-        _releaseRedis = releaseRedis ?? throw new ArgumentNullException(nameof(releaseRedis));
-        _releaseDb = _releaseRedis.GetDatabase();
+        _blockingRedisConnection = blockingRedisConnection ?? throw new ArgumentNullException(nameof(blockingRedisConnection));
+        _blockingDb = _blockingRedisConnection.Connection.GetDatabase();
+        _nonBlockingRedisConnection = nonBlockingRedisConnection ?? throw new ArgumentNullException(nameof(nonBlockingRedisConnection));
+        _nonBlockingDb = _nonBlockingRedisConnection.Connection.GetDatabase();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
         _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
@@ -90,7 +90,7 @@ public class RedisTerminalService : ITerminalService
                     _logger.LogDebug("Terminal info added to cache: {TerminalId}", terminalId);
                 }
                 // Check if this terminal already exists in Redis
-                bool exists = await _db.KeyExistsAsync(statusKey);
+                bool exists = await _nonBlockingDb.KeyExistsAsync(statusKey);
                 if (!exists)
                 {
                     // Set initial status in Redis (only dynamic data)
@@ -105,7 +105,7 @@ public class RedisTerminalService : ITerminalService
                     await UpdateTerminalStatusAsync(initialStatus);
 
                     // Add to available queue (list-based)
-                    await _db.ListRightPushAsync(TerminalQueueKey, terminalId);
+                    await _blockingDb.ListRightPushAsync(TerminalQueueKey, terminalId);
                     _logger.LogInformation("Added terminal to queue: {TerminalId}", terminalId);
                 }
                 else
@@ -194,7 +194,7 @@ public class RedisTerminalService : ITerminalService
         }
 
         // Count the number of terminal status keys in Redis (async)
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
+        var server = _nonBlockingRedisConnection.Connection.GetServer(_nonBlockingRedisConnection.Connection.GetEndPoints().First());
         var statusKeys = server.KeysAsync(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         int statusCount = 0;
         await foreach (var key in statusKeys)
@@ -215,7 +215,7 @@ public class RedisTerminalService : ITerminalService
         try
         {
             // Use native BLPOP via ExecuteAsync. This method blocks until a terminal is available or the timeout expires.
-            var result = await _db.ExecuteAsync("BLPOP", TerminalQueueKey, waitTimeoutSeconds.ToString());
+            var result = await _blockingDb.ExecuteAsync("BLPOP", TerminalQueueKey, waitTimeoutSeconds.ToString());
             if (result.IsNull)
             {
                 _logger.LogWarning("No terminals available after waiting {Timeout} seconds", waitTimeoutSeconds);
@@ -288,7 +288,7 @@ public class RedisTerminalService : ITerminalService
             };
             await UpdateTerminalStatusAsync(status);
             // Use _releaseDb for queue push
-            await _releaseDb.ListRightPushAsync(TerminalQueueKey, terminalId);
+            await _nonBlockingDb.ListRightPushAsync(TerminalQueueKey, terminalId);
             _logger.LogInformation("Terminal released and added back to queue: {TerminalId}", terminalId);
         }
         catch (Exception ex)
@@ -305,16 +305,16 @@ public class RedisTerminalService : ITerminalService
     {
         _logger.LogInformation("GetOrCreateSessionAsync called for terminal: {TerminalId}", terminalId);
         string sessionKey = string.Format(TerminalSessionKeyPattern, terminalId);
-        string? sessionId = await _db.StringGetAsync(sessionKey);
+        string? sessionId = await _blockingDb.StringGetAsync(sessionKey);
         if (!string.IsNullOrEmpty(sessionId))
         {
             // Session exists, refresh TTL
-            await _db.KeyExpireAsync(sessionKey, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
+            await _blockingDb.KeyExpireAsync(sessionKey, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
             return sessionId;
         }
         // TODO: Create new session. This needs to be implemented by the real application logic.
         sessionId = $"session-{terminalId}-{Guid.NewGuid()}";
-        await _db.StringSetAsync(sessionKey, sessionId, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
+        await _blockingDb.StringSetAsync(sessionKey, sessionId, TimeSpan.FromSeconds(_config.SessionTimeoutSeconds));
         return sessionId;
     }
 
@@ -331,8 +331,8 @@ public class RedisTerminalService : ITerminalService
             new HashEntry(nameof(TerminalStatus.PodName), status.PodName ?? string.Empty),
             new HashEntry(nameof(TerminalStatus.LastUsedTime), status.LastUsedTime)
         };
-        await _db.HashSetAsync(statusKey, hashEntries);
-        await _db.KeyExpireAsync(statusKey, TimeSpan.FromMinutes(30));
+        await _nonBlockingDb.HashSetAsync(statusKey, hashEntries);
+        await _nonBlockingDb.KeyExpireAsync(statusKey, TimeSpan.FromMinutes(30));
         _logger.LogDebug("Updated terminal status in Redis (hash): {TerminalId} - {Status}", status.TerminalId, status.Status);
     }
 
@@ -342,12 +342,12 @@ public class RedisTerminalService : ITerminalService
     public async Task<List<TerminalStatus>> GetTerminalStatusListAsync()
     {
         _logger.LogInformation("GetTerminalStatusListAsync called");
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
+        var server = _nonBlockingRedisConnection.Connection.GetServer(_nonBlockingRedisConnection.Connection.GetEndPoints().First());
         var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         var terminalStatuses = new List<TerminalStatus>();
         foreach (var key in statusKeys)
         {
-            var hash = await _db.HashGetAllAsync(key);
+            var hash = await _blockingDb.HashGetAllAsync(key);
             if (hash.Length > 0)
             {
                 var status = new TerminalStatus
@@ -370,13 +370,13 @@ public class RedisTerminalService : ITerminalService
     public async Task ReclaimOrphanedTerminalsAsync()
     {
         _logger.LogInformation("ReclaimOrphanedTerminalsAsync called");
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
+        var server = _nonBlockingRedisConnection.Connection.GetServer(_nonBlockingRedisConnection.Connection.GetEndPoints().First());
         var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var reclaimed = 0;
         foreach (var key in statusKeys)
         {
-            var hash = await _db.HashGetAllAsync(key);
+            var hash = await _blockingDb.HashGetAllAsync(key);
             if (hash.Length == 0) continue;
             var status = new TerminalStatus
             {
@@ -392,7 +392,7 @@ public class RedisTerminalService : ITerminalService
                 status.PodName = string.Empty;
                 status.LastUsedTime = now;
                 await UpdateTerminalStatusAsync(status);
-                await _db.ListRightPushAsync(TerminalQueueKey, status.TerminalId);
+                await _blockingDb.ListRightPushAsync(TerminalQueueKey, status.TerminalId);
                 reclaimed++;
             }
         }
@@ -405,12 +405,12 @@ public class RedisTerminalService : ITerminalService
     public async Task ShutdownAsync()
     {
         _logger.LogInformation("ShutdownAsync called");
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
+        var server = _nonBlockingRedisConnection.Connection.GetServer(_nonBlockingRedisConnection.Connection.GetEndPoints().First());
         var statusKeys = server.Keys(pattern: string.Format(TerminalStatusKeyPattern, "*"));
         var released = 0;
         foreach (var key in statusKeys)
         {
-            var hash = await _db.HashGetAllAsync(key);
+            var hash = await _blockingDb.HashGetAllAsync(key);
             if (hash.Length == 0) continue;
             var status = new TerminalStatus
             {
@@ -426,7 +426,7 @@ public class RedisTerminalService : ITerminalService
                 status.PodName = string.Empty;
                 status.LastUsedTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 await UpdateTerminalStatusAsync(status);
-                await _db.ListRightPushAsync(TerminalQueueKey, status.TerminalId);
+                await _blockingDb.ListRightPushAsync(TerminalQueueKey, status.TerminalId);
                 released++;
             }
         }

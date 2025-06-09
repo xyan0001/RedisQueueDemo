@@ -2,17 +2,17 @@ using StackExchange.Redis;
 
 namespace TerminalManagementService.Services
 {
-    // Wrapper for default Redis connection
-    public class DefaultRedisConnection
+    // Wrapper for blocking Redis connection (used for blocking operations like BLPOP)
+    public class BlockingRedisConnection
     {
         public ConnectionMultiplexer Connection { get; }
-        public DefaultRedisConnection(ConnectionMultiplexer connection) => Connection = connection;
+        public BlockingRedisConnection(ConnectionMultiplexer connection) => Connection = connection;
     }
 
-    // Wrapper for release Redis connection
-    public class ReleaseRedisConnection
+    // Wrapper for non-blocking Redis connection (used for non-blocking operations like RPUSH, status updates, etc.)
+    public class NonBlockingRedisConnection
     {
         public ConnectionMultiplexer Connection { get; }
-        public ReleaseRedisConnection(ConnectionMultiplexer connection) => Connection = connection;
+        public NonBlockingRedisConnection(ConnectionMultiplexer connection) => Connection = connection;
     }
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using TerminalManagementService;
 using TerminalManagementService.Models;
@@ -17,33 +18,38 @@ builder.Services.AddSwaggerGen();
 builder.Services.Configure<TerminalConfiguration>(
     builder.Configuration.GetSection("TerminalConfiguration"));
 
-// Register default Redis connection
-builder.Services.AddSingleton<DefaultRedisConnection>(sp =>
+// Get Redis connection string from configuration
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+
+// Register blocking Redis connection (for blocking operations like BLPOP)
+builder.Services.AddSingleton<BlockingRedisConnection>(sp =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    var options = ConfigurationOptions.Parse(connectionString);
-    options.AbortOnConnectFail = false;
-    return new DefaultRedisConnection(ConnectionMultiplexer.Connect(options));
+    var options = ConfigurationOptions.Parse(redisConnectionString ?? "localhost:6379");
+    options.ConnectRetry = 5;
+    options.ConnectTimeout = 5000;
+    options.ClientName = "BlockingRedisClient";
+    return new BlockingRedisConnection(ConnectionMultiplexer.Connect(options));
 });
 
-// Register release Redis connection
-builder.Services.AddSingleton<ReleaseRedisConnection>(sp =>
+// Register non-blocking Redis connection (for non-blocking operations like RPUSH, status updates, etc.)
+builder.Services.AddSingleton<NonBlockingRedisConnection>(sp =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("RedisRelease") ?? builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    var options = ConfigurationOptions.Parse(connectionString);
-    options.AbortOnConnectFail = false;
-    return new ReleaseRedisConnection(ConnectionMultiplexer.Connect(options));
+    var options = ConfigurationOptions.Parse(redisConnectionString ?? "localhost:6379");
+    options.ConnectRetry = 5;
+    options.ConnectTimeout = 5000;
+    options.ClientName = "NonBlockingRedisClient";
+    return new NonBlockingRedisConnection(ConnectionMultiplexer.Connect(options));
 });
 
 // Register services with explicit injection for both Redis instances
 builder.Services.AddSingleton<ITerminalService>(sp =>
 {
-    var defaultRedis = sp.GetRequiredService<DefaultRedisConnection>();
-    var releaseRedis = sp.GetRequiredService<ReleaseRedisConnection>();
-    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TerminalConfiguration>>();
-    var appConfig = sp.GetRequiredService<IConfiguration>();
+    var blockingRedis = sp.GetRequiredService<BlockingRedisConnection>();
+    var nonBlockingRedis = sp.GetRequiredService<NonBlockingRedisConnection>();
+    var configOptions = sp.GetRequiredService<IOptions<TerminalConfiguration>>();
     var logger = sp.GetRequiredService<ILogger<RedisTerminalService>>();
-    return new RedisTerminalService(defaultRedis.Connection, releaseRedis.Connection, config, appConfig, logger);
+    var appConfig = sp.GetRequiredService<IConfiguration>();
+    return new RedisTerminalService(blockingRedis, nonBlockingRedis, configOptions, appConfig, logger);
 });
 builder.Services.AddTransient<TerminalLifecycleSimulator>();
 //builder.Services.AddHostedService<TerminalCleanupService>();

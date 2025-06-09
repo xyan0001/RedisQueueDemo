@@ -95,8 +95,8 @@ public class TerminalLifecycleSimulator(
     {
         var operationStopwatch = new Stopwatch();
         operationStopwatch.Start();
-        var simulatedUsageTimeMs = 100;
-        simulatedUsageTimeMs = Math.Max(100, simulatedUsageTimeMs + _random.Next(-50, 150)); // Add some variability
+        var simulatedUsageTimeMs = 200;
+        //simulatedUsageTimeMs = Math.Max(100, simulatedUsageTimeMs + _random.Next(-50, 150)); // Add some variability
         var terminalId = "";
         try
         {
